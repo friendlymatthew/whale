@@ -6,11 +6,11 @@ use crate::grammar::{
     BlockType, CodeSection, CustomSection, DataMode, DataSection, DataSegment, ElementMode,
     ElementSection, ElementSegment, Export, ExportDescription, ExportSection, Expression, Function,
     FunctionSection, FunctionType, Global, GlobalSection, GlobalType, Import, ImportDescription,
-    ImportSection, Instruction, Limit, Local, MemArg, MemorySection, MemoryType, Mutability,
-    RefType, ResultType, Section, TableSection, TableType, TypeSection, ValueType, MAGIC_NUMBER,
-    TERM_ELSE_BYTE, TERM_END_BYTE,
+    ImportSection, Instruction, Limit, Local, MAGIC_NUMBER, MemArg, MemorySection, MemoryType,
+    Mutability, RefType, ResultType, Section, TableSection, TableType, TERM_ELSE_BYTE, TERM_END_BYTE,
+    TypeSection, ValueType,
 };
-use crate::leb128::{read_i32, read_i64, read_u32, MAX_LEB128_LEN_32, MAX_LEB128_LEN_64};
+use crate::leb128::{MAX_LEB128_LEN_32, MAX_LEB128_LEN_64, read_i32, read_i64, read_u32};
 
 #[derive(Debug)]
 pub struct Parser<'a> {
@@ -638,120 +638,110 @@ impl<'a> Parser<'a> {
     fn parse_element_segement(&mut self) -> Result<ElementSegment> {
         let segment = match self.read_u32()? {
             0 => {
-                let e = self.parse_expression()?;
-                let y = self
+                let offset = self.parse_expression()?;
+                let expression = vec![self
                     .parse_vec(Self::read_u32)?
                     .iter()
                     .map(|idx| Instruction::RefFunc(*idx))
-                    .collect::<Vec<_>>();
+                    .collect::<Vec<_>>()];
 
                 ElementSegment {
                     ref_type: RefType::FuncRef,
-                    expression: vec![y],
+                    expression,
                     mode: ElementMode::Active {
                         table_index: 0,
-                        offset: e,
+                        offset,
                     },
                 }
             }
             1 => {
                 ensure!(self.read_u8()? == 0x00, "Expected elemkind 0x00.");
 
-                let y = self
+                let expression = vec![self
                     .parse_vec(Self::read_u32)?
                     .iter()
                     .map(|idx| Instruction::RefFunc(*idx))
-                    .collect::<Vec<_>>();
+                    .collect::<Vec<_>>()];
 
                 ElementSegment {
                     ref_type: RefType::FuncRef,
-                    expression: vec![y],
+                    expression,
                     mode: ElementMode::Passive,
                 }
             }
             2 => {
                 let table_index = self.read_u32()?;
-                let expr = self.parse_expression()?;
+                let offset = self.parse_expression()?;
                 ensure!(self.read_u8()? == 0x00, "Expected elemkind 0x00.");
 
-                let y = self
+                let expression = vec![self
                     .parse_vec(Self::read_u32)?
                     .iter()
                     .map(|idx| Instruction::RefFunc(*idx))
-                    .collect::<Vec<_>>();
+                    .collect::<Vec<_>>()];
 
                 ElementSegment {
                     ref_type: RefType::FuncRef,
-                    expression: vec![y],
+                    expression,
                     mode: ElementMode::Active {
                         table_index,
-                        offset: expr,
+                        offset,
                     },
                 }
             }
             3 => {
                 ensure!(self.read_u8()? == 0x00, "Expected elemkind 0x00.");
 
-                let y = self
+                let expression = vec![self
                     .parse_vec(Self::read_u32)?
                     .iter()
                     .map(|idx| Instruction::RefFunc(*idx))
-                    .collect::<Vec<_>>();
+                    .collect::<Vec<_>>()];
 
                 ElementSegment {
                     ref_type: RefType::FuncRef,
-                    expression: vec![y],
+                    expression,
                     mode: ElementMode::Declarative,
                 }
             }
             4 => {
-                let e = self.parse_expression()?;
-                let el = self.parse_vec(Self::parse_expression)?;
+                let offset = self.parse_expression()?;
+                let expression = self.parse_vec(Self::parse_expression)?;
 
                 ElementSegment {
                     ref_type: RefType::FuncRef,
-                    expression: el,
+                    expression,
                     mode: ElementMode::Active {
                         table_index: 0,
-                        offset: e,
+                        offset,
                     },
                 }
             }
-            5 => {
-                let et = self.parse_reference_type()?;
-                let el = self.parse_vec(Self::parse_expression)?;
-
-                ElementSegment {
-                    ref_type: et,
-                    expression: el,
-                    mode: ElementMode::Passive,
-                }
-            }
+            5 => ElementSegment {
+                ref_type: self.parse_reference_type()?,
+                expression: self.parse_vec(Self::parse_expression)?,
+                mode: ElementMode::Passive,
+            },
             6 => {
-                let x = self.read_u32()?;
-                let e = self.parse_expression()?;
-                let et = self.parse_reference_type()?;
-                let el = self.parse_vec(Self::parse_expression)?;
+                let table_index = self.read_u32()?;
+                let offset = self.parse_expression()?;
+                let ref_type = self.parse_reference_type()?;
+                let expression = self.parse_vec(Self::parse_expression)?;
 
                 ElementSegment {
-                    ref_type: et,
-                    expression: el,
+                    ref_type,
+                    expression,
                     mode: ElementMode::Active {
-                        table_index: x,
-                        offset: e,
+                        table_index,
+                        offset,
                     },
                 }
             }
-            7 => {
-                let et = self.parse_reference_type()?;
-                let el = self.parse_vec(Self::parse_expression)?;
-
-                ElementSegment {
-                    ref_type: et,
-                    expression: el,
-                    mode: ElementMode::Declarative,
-                }
-            }
+            7 => ElementSegment {
+                ref_type: self.parse_reference_type()?,
+                expression: self.parse_vec(Self::parse_expression)?,
+                mode: ElementMode::Declarative,
+            },
             foreign => bail!("Encountered foreign element segement kind: {}", foreign),
         };
 
@@ -789,14 +779,11 @@ impl<'a> Parser<'a> {
     fn parse_data_segment(&mut self) -> Result<DataSegment> {
         let segment = match self.read_u32()? {
             0 => {
-                let exp = self.parse_expression()?;
-                let bs = self.parse_vec(Self::read_u8)?;
+                let offset = self.parse_expression()?;
+                let bytes = self.parse_vec(Self::read_u8)?;
                 DataSegment {
-                    bytes: bs,
-                    mode: DataMode::Active {
-                        memory: 0,
-                        offset: exp,
-                    },
+                    bytes,
+                    mode: DataMode::Active { memory: 0, offset },
                 }
             }
             1 => DataSegment {
@@ -804,16 +791,13 @@ impl<'a> Parser<'a> {
                 mode: DataMode::Passive,
             },
             2 => {
-                let x = self.read_u32()?;
-                let exp = self.parse_expression()?;
-                let bs = self.parse_vec(Self::read_u8)?;
+                let memory = self.read_u32()?;
+                let offset = self.parse_expression()?;
+                let bytes = self.parse_vec(Self::read_u8)?;
 
                 DataSegment {
-                    bytes: bs,
-                    mode: DataMode::Active {
-                        memory: x,
-                        offset: exp,
-                    },
+                    bytes,
+                    mode: DataMode::Active { memory, offset },
                 }
             }
             foreign => bail!("Encountered foreign data kind. Got: {}", foreign),
