@@ -31,7 +31,7 @@ impl<'a> Parser<'a> {
             let id = self.read_u8()?;
 
             let section = self.parse_section(id)?;
-            dbg!(section);
+            dbg!(id);
         }
 
         Ok(())
@@ -553,8 +553,12 @@ impl<'a> Parser<'a> {
     // 5.5: Modules
 
     fn parse_custom_section(&mut self, size: u32) -> Result<CustomSection> {
+        let current_pos = self.cursor;
+
         let name = self.parse_name()?;
-        let bytes = self.read_slice(size as usize - name.len())?;
+        let slice_len = size as usize - (self.cursor - current_pos);
+
+        let bytes = self.read_slice(slice_len)?;
 
         Ok(CustomSection { name, bytes })
     }
