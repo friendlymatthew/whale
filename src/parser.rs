@@ -1,8 +1,9 @@
 use std::cmp::min;
+use std::collections::VecDeque;
 
-use anyhow::{bail, ensure, Result};
+use anyhow::{anyhow, bail, ensure, Result};
 
-use crate::grammar::{
+use crate::binary_grammar::{
     BlockType, CodeSection, CustomSection, DataMode, DataSection, DataSegment, ElementMode,
     ElementSection, ElementSegment, Export, ExportDescription, ExportSection, Expression, Function,
     FunctionSection, FunctionType, Global, GlobalSection, GlobalType, Import, ImportDescription,
@@ -11,33 +12,70 @@ use crate::grammar::{
     TypeSection, ValueType,
 };
 use crate::leb128::{MAX_LEB128_LEN_32, MAX_LEB128_LEN_64, read_i32, read_i64, read_u32};
+use crate::Module;
 
 #[derive(Debug)]
 pub struct Parser<'a> {
     cursor: usize,
     buffer: &'a [u8],
+    function_types: VecDeque<u32>,
 }
 
 impl<'a> Parser<'a> {
     pub const fn new(buffer: &'a [u8]) -> Self {
-        Self { buffer, cursor: 0 }
+        Self {
+            buffer,
+            cursor: 0,
+            function_types: VecDeque::new(),
+        }
     }
 
     /// Parses a .wasm file in its entirety.
-    pub fn parse(&mut self) -> Result<()> {
-        let _version = self.parse_preamble()?;
+    pub fn parse_module(&mut self) -> Result<Module<'a>> {
+        let mut module = Module::new(self.parse_preamble()?);
 
         while self.cursor < self.buffer.len() {
             let id = self.read_u8()?;
 
-            let section = self.parse_section(id)?;
-            dbg!(id);
+            match self.parse_section(id)? {
+                Section::Custom(custom) => module.customs.push(custom),
+                Section::Type(TypeSection { mut function_types }) => {
+                    module.types.append(&mut function_types)
+                }
+                Section::Import(ImportSection { mut imports }) => {
+                    module.imports.append(&mut imports)
+                }
+                Section::Function(FunctionSection { indices }) => {
+                    self.function_types.extend(indices)
+                }
+                Section::Table(TableSection { mut tables }) => module.tables.append(&mut tables),
+                Section::Memory(MemorySection { mut memories }) => {
+                    module.mems.append(&mut memories)
+                }
+                Section::Global(GlobalSection { mut globals }) => {
+                    module.globals.append(&mut globals)
+                }
+                Section::Export(ExportSection { mut exports }) => {
+                    module.exports.append(&mut exports)
+                }
+                Section::Start() => todo!(),
+                Section::Element(ElementSection { mut elements }) => {
+                    module.element_segments.append(&mut elements)
+                }
+                Section::Code(CodeSection { mut codes }) => module.functions.append(&mut codes),
+                Section::Data(DataSection { mut data_segments }) => {
+                    module.data_segments.append(&mut data_segments)
+                }
+                Section::DataCount(num_data_segments) => {
+                    ensure!(num_data_segments as usize == module.data_segments.len(), "")
+                }
+            }
         }
 
-        Ok(())
+        Ok(module)
     }
 
-    fn parse_preamble(&mut self) -> Result<u16> {
+    fn parse_preamble(&mut self) -> Result<u8> {
         ensure!(
             self.read_slice(4)? == MAGIC_NUMBER,
             "Expected magic number in preamble."
@@ -552,7 +590,7 @@ impl<'a> Parser<'a> {
 
     // 5.5: Modules
 
-    fn parse_custom_section(&mut self, size: u32) -> Result<CustomSection> {
+    fn parse_custom_section(&mut self, size: u32) -> Result<CustomSection<'a>> {
         let current_pos = self.cursor;
 
         let name = self.parse_name()?;
@@ -768,9 +806,15 @@ impl<'a> Parser<'a> {
     fn parse_code(&mut self) -> Result<Function> {
         let _size = self.read_u32()?;
 
+        let type_index = self
+            .function_types
+            .pop_front()
+            .ok_or(anyhow!("Function type list empty"))?;
+
         Ok(Function {
+            type_index,
             locals: self.parse_vec(Self::parse_local)?,
-            expression: self.parse_expression()?,
+            body: self.parse_expression()?,
         })
     }
 
@@ -816,8 +860,8 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_section(&mut self, id: u8) -> Result<Section> {
-        use crate::grammar::section_id::*;
+    fn parse_section(&mut self, id: u8) -> Result<Section<'a>> {
+        use crate::binary_grammar::section_id::*;
 
         let size = self.read_u32()?;
 
@@ -846,20 +890,12 @@ impl<'a> Parser<'a> {
 mod tests {
     use super::*;
 
-    fn parse(path: &str) -> Result<()> {
-        let bytes = std::fs::read(path)?;
-
-        let mut parser = Parser::new(&bytes);
-        parser.parse()?;
-
-        Ok(())
-    }
-
     #[test]
     fn parse_hyper() -> Result<()> {
-        parse("./tests/hyper-app-691811a8315a1230_bg.wasm")?;
+        let bytes = std::fs::read("./tests/hyper-app-691811a8315a1230_bg.wasm")?;
 
-        assert!(false);
+        let mut parser = Parser::new(&bytes);
+        let module = parser.parse_module()?;
 
         Ok(())
     }

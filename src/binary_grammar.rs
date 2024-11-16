@@ -21,6 +21,41 @@ pub mod section_id {
 }
 
 #[derive(Debug)]
+pub struct Module<'a> {
+    pub version: u8,
+    pub types: Vec<FunctionType>,
+    pub functions: Vec<Function>,
+    pub tables: Vec<TableType>,
+    pub mems: Vec<MemoryType>,
+    pub element_segments: Vec<ElementSegment>,
+    pub globals: Vec<Global>,
+    pub data_segments: Vec<DataSegment>,
+    pub start: u32,
+    pub imports: Vec<Import<'a>>,
+    pub exports: Vec<Export<'a>>,
+    pub customs: Vec<CustomSection<'a>>,
+}
+
+impl<'a> Module<'a> {
+    pub fn new(version: u8) -> Self {
+        Self {
+            version,
+            types: vec![],
+            functions: vec![],
+            tables: vec![],
+            mems: vec![],
+            element_segments: vec![],
+            globals: vec![],
+            data_segments: vec![],
+            start: 0,
+            imports: vec![],
+            exports: vec![],
+            customs: vec![],
+        }
+    }
+}
+
+#[derive(Debug)]
 pub enum Section<'a> {
     Custom(CustomSection<'a>),
     Type(TypeSection),
@@ -650,8 +685,9 @@ pub struct Local {
 
 #[derive(Debug)]
 pub struct Function {
+    pub type_index: u32,
     pub locals: Vec<Local>,
-    pub expression: Expression,
+    pub body: Expression,
 }
 
 #[derive(Debug)]
