@@ -29,7 +29,7 @@ pub struct Module<'a> {
     pub mems: Vec<MemoryType>,
     pub element_segments: Vec<ElementSegment>,
     pub globals: Vec<Global>,
-    pub data_segments: Vec<DataSegment>,
+    pub data_segments: Vec<DataSegment<'a>>,
     pub start: u32,
     pub imports: Vec<Import<'a>>,
     pub exports: Vec<Export<'a>>,
@@ -68,7 +68,7 @@ pub enum Section<'a> {
     Start(),
     Element(ElementSection),
     Code(CodeSection),
-    Data(DataSection),
+    Data(DataSection<'a>),
     DataCount(u32),
 }
 
@@ -702,12 +702,12 @@ pub enum DataMode {
 }
 
 #[derive(Debug)]
-pub struct DataSegment {
-    pub bytes: Vec<u8>,
+pub struct DataSegment<'a> {
+    pub bytes: &'a [u8],
     pub mode: DataMode,
 }
 
 #[derive(Debug)]
-pub struct DataSection {
-    pub data_segments: Vec<DataSegment>,
+pub struct DataSection<'a> {
+    pub data_segments: Vec<DataSegment<'a>>,
 }

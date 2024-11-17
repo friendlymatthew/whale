@@ -8,11 +8,10 @@ use crate::binary_grammar::{
     ElementSection, ElementSegment, Export, ExportDescription, ExportSection, Expression, Function,
     FunctionSection, FunctionType, Global, GlobalSection, GlobalType, Import, ImportDescription,
     ImportSection, Instruction, Limit, Local, MAGIC_NUMBER, MemArg, MemorySection, MemoryType,
-    Mutability, RefType, ResultType, Section, TableSection, TableType, TERM_ELSE_BYTE, TERM_END_BYTE,
-    TypeSection, ValueType,
+    Module, Mutability, RefType, ResultType, Section, TableSection, TableType, TERM_ELSE_BYTE,
+    TERM_END_BYTE, TypeSection, ValueType,
 };
 use crate::leb128::{MAX_LEB128_LEN_32, MAX_LEB128_LEN_64, read_i32, read_i64, read_u32};
-use crate::Module;
 
 #[derive(Debug)]
 pub struct Parser<'a> {
@@ -824,24 +823,31 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_data_segment(&mut self) -> Result<DataSegment> {
+    fn parse_data_segment(&mut self) -> Result<DataSegment<'a>> {
         let segment = match self.read_u32()? {
             0 => {
                 let offset = self.parse_expression()?;
-                let bytes = self.parse_vec(Self::read_u8)?;
+
+                let len = self.read_u32()? as usize;
+                let bytes = self.read_slice(len)?;
+
                 DataSegment {
                     bytes,
                     mode: DataMode::Active { memory: 0, offset },
                 }
             }
             1 => DataSegment {
-                bytes: self.parse_vec(Self::read_u8)?,
+                bytes: {
+                    let len = self.read_u32()? as usize;
+                    self.read_slice(len)?
+                },
                 mode: DataMode::Passive,
             },
             2 => {
                 let memory = self.read_u32()?;
                 let offset = self.parse_expression()?;
-                let bytes = self.parse_vec(Self::read_u8)?;
+                let len = self.read_u32()? as usize;
+                let bytes = self.read_slice(len)?;
 
                 DataSegment {
                     bytes,
@@ -854,7 +860,7 @@ impl<'a> Parser<'a> {
         Ok(segment)
     }
 
-    fn parse_data_section(&mut self) -> Result<DataSection> {
+    fn parse_data_section(&mut self) -> Result<DataSection<'a>> {
         Ok(DataSection {
             data_segments: self.parse_vec(Self::parse_data_segment)?,
         })
