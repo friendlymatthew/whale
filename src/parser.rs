@@ -7,11 +7,11 @@ use crate::binary_grammar::{
     BlockType, CodeSection, CustomSection, DataMode, DataSection, DataSegment, ElementMode,
     ElementSection, ElementSegment, Export, ExportDescription, ExportSection, Expression, Function,
     FunctionSection, FunctionType, Global, GlobalSection, GlobalType, Import, ImportDescription,
-    ImportSection, Instruction, Limit, Local, MAGIC_NUMBER, MemArg, MemorySection, MemoryType,
-    Module, Mutability, RefType, ResultType, Section, TableSection, TableType, TERM_ELSE_BYTE,
-    TERM_END_BYTE, TypeSection, ValueType,
+    ImportSection, Instruction, Limit, Local, MemArg, MemorySection, MemoryType, Module,
+    Mutability, RefType, ResultType, Section, TableSection, TableType, TypeSection, ValueType,
+    MAGIC_NUMBER, TERM_ELSE_BYTE, TERM_END_BYTE,
 };
-use crate::leb128::{MAX_LEB128_LEN_32, MAX_LEB128_LEN_64, read_i32, read_i64, read_u32};
+use crate::leb128::{read_i32, read_i64, read_u32, MAX_LEB128_LEN_32, MAX_LEB128_LEN_64};
 
 #[derive(Debug)]
 pub struct Parser<'a> {

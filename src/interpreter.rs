@@ -17,7 +17,7 @@ impl<'a> Interpreter<'a> {
         module_data: &'a [u8],
         imports: Vec<ExternalImport>,
         initial_global_values: Vec<Value>,
-        element_segment_refs: Vec<Ref>,
+        element_segment_refs: Vec<Vec<Ref>>,
     ) -> Result<Self> {
         let mut module_parser = Parser::new(module_data);
 

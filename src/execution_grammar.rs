@@ -90,25 +90,25 @@ impl<'a> Debug for FunctionInstance<'a> {
 
 #[derive(Debug)]
 pub struct TableInstance {
-    pub r#type: TableType,
+    pub table_type: TableType,
     pub elem: Vec<Ref>,
 }
 
 #[derive(Debug)]
 pub struct MemoryInstance {
-    pub r#type: MemoryType,
+    pub memory_type: MemoryType,
     pub data: Vec<u8>,
 }
 
 #[derive(Debug)]
 pub struct GlobalInstance {
-    pub r#type: GlobalType,
+    pub global_type: GlobalType,
     pub value: Value,
 }
 
 #[derive(Debug)]
 pub struct ElementInstance {
-    pub r#type: RefType,
+    pub ref_type: RefType,
     pub elem: Vec<Ref>,
 }
 
