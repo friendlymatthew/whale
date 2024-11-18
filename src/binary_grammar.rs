@@ -72,13 +72,13 @@ pub enum Section<'a> {
     DataCount(u32),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum RefType {
     FuncRef,
     ExternRef,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ValueType {
     I32,
     I64,
@@ -88,10 +88,10 @@ pub enum ValueType {
     Ref(RefType),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ResultType(pub Vec<ValueType>);
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FunctionType(pub ResultType, pub ResultType);
 
 #[derive(Debug)]

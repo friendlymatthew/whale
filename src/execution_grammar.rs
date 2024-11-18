@@ -1,3 +1,6 @@
+use std::fmt::{Debug, Formatter};
+use std::rc::Rc;
+
 use crate::binary_grammar::{
     Function, FunctionType, GlobalType, Instruction, MemoryType, RefType, TableType,
 };
@@ -25,7 +28,8 @@ pub enum Result {
     Trap,
 }
 
-#[derive(Debug)]
+// todo: is there a better way to store ModuleInstances than cloning?
+#[derive(Debug, Clone)]
 pub struct ModuleInstance<'a> {
     pub types: Vec<FunctionType>,
     pub function_addrs: Vec<usize>,
@@ -52,7 +56,6 @@ impl<'a> ModuleInstance<'a> {
     }
 }
 
-#[derive(Debug)]
 pub enum FunctionInstance<'a> {
     Local {
         function_type: FunctionType,
@@ -61,7 +64,29 @@ pub enum FunctionInstance<'a> {
     },
     Host {
         function_type: FunctionType,
+        code: Rc<dyn Fn()>,
     },
+}
+
+impl<'a> Debug for FunctionInstance<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Local {
+                function_type,
+                module,
+                code,
+            } => f
+                .debug_struct("FunctionInstance Local")
+                .field("function_type: {:?}", function_type)
+                .field("module: {:?}", module)
+                .field("code: {:?}", code)
+                .finish(),
+            Self::Host { function_type, .. } => f
+                .debug_struct("FunctionInstance Host")
+                .field("function_type {:?}", function_type)
+                .finish(),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -94,19 +119,33 @@ pub struct DataInstance<'a> {
 }
 
 pub enum ImportValue {
-    Func(Box<dyn Fn()>),
+    // Wrap in Rc to convert a dynamically sized type into one with a statically known
+    // type.
+    Func(Rc<dyn Fn()>),
     Table(Vec<Ref>),
     Memory(Vec<u8>),
     Global(Value),
 }
 
+impl Debug for ImportValue {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ImportValue::Func(_) => f.debug_tuple("ImportValue Function").finish(),
+            ImportValue::Table(t) => f.debug_tuple("Import Value Table").field(t).finish(),
+            ImportValue::Memory(m) => f.debug_tuple("Import Value Memory").field(m).finish(),
+            ImportValue::Global(g) => f.debug_tuple("Import Value Global").field(g).finish(),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct ExternalImport<'a> {
     pub module: &'a str,
     pub name: &'a str,
     pub value: ImportValue,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ExternalValue {
     Function { addr: usize },
     Table { addr: usize },
@@ -114,7 +153,7 @@ pub enum ExternalValue {
     Global { addr: usize },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ExportInstance<'a> {
     pub name: &'a str,
     pub value: ExternalValue,
