@@ -1,8 +1,6 @@
-use std::rc::Rc;
-
 use anyhow::{anyhow, bail, Result};
 
-use crate::binary_grammar::{Function, Import, ImportDescription, Module};
+use crate::binary_grammar::{Function, Import, ImportDescription, MemoryType, Module, TableType};
 use crate::execution_grammar::{
     DataInstance, ElementInstance, ExternalImport, FunctionInstance, GlobalInstance, ImportValue,
     MemoryInstance, ModuleInstance, Ref, TableInstance, Value,
@@ -12,7 +10,7 @@ use crate::execution_grammar::{
 pub struct Store<'a> {
     pub functions: Vec<FunctionInstance<'a>>,
     pub tables: Vec<TableInstance>,
-    pub memories: Vec<MemoryInstance<'a>>,
+    pub memories: Vec<MemoryInstance>,
     pub globals: Vec<GlobalInstance>,
     pub element_segments: Vec<ElementInstance>,
     pub data_segments: Vec<DataInstance<'a>>,
@@ -57,7 +55,7 @@ impl<'a> Store<'a> {
 
     fn allocate_host_function(
         &mut self,
-        h_f: Rc<dyn Fn()>,
+        h_f: Box<dyn Fn()>,
         f_idx: u32,
         module_instance: &ModuleInstance<'a>,
     ) -> Result<usize> {
@@ -75,6 +73,31 @@ impl<'a> Store<'a> {
         });
 
         Ok(func_address)
+    }
+
+    fn allocate_table(&mut self, table_type: TableType, initial_ref: Ref) -> Result<usize> {
+        let n = table_type.limit.min;
+
+        let table_address = self.tables.len();
+
+        self.tables.push(TableInstance {
+            r#type: table_type,
+            elem: vec![initial_ref; n as usize],
+        });
+
+        Ok(table_address)
+    }
+
+    fn allocate_memory(&mut self, memory_type: MemoryType) -> Result<usize> {
+        let memory_address = self.memories.len();
+        let n = memory_type.0.min;
+
+        self.memories.push(MemoryInstance {
+            r#type: memory_type,
+            data: vec![0u8; n as usize],
+        });
+
+        Ok(memory_address)
     }
 
     pub fn allocate_module(
@@ -100,20 +123,20 @@ impl<'a> Store<'a> {
                      ..
                  }| { module == *extern_module && name == *extern_name },
             ) {
-                let ExternalImport { value, .. } = &imports[index];
+                let ExternalImport { value, .. } = imports.remove(index);
 
                 match (value, description) {
                     (ImportValue::Func(f), ImportDescription::Func(f_idx)) => {
                         let host_function_address =
-                            self.allocate_host_function(f.clone(), f_idx, &module_instance)?;
+                            self.allocate_host_function(f, f_idx, &module_instance)?;
                     }
                     (ImportValue::Global(g), ImportDescription::Global(g_type)) => {}
-                    (ImportValue::Table(t), ImportDescription::Table(t_type)) => {}
+                    (ImportValue::Table(t), ImportDescription::Table(t_type)) => {
+                        let table_addresses = self.allocate_table(t_type, Ref::Null)?;
+                    }
                     (ImportValue::Memory(m), ImportDescription::Mem(m_type)) => {}
                     _ => bail!("Mismatched type. todo! impl Debug for ImportValue."),
                 }
-
-                imports.remove(index);
             } else {
                 bail!(
                     "Unrecognized import: Expected module: {}, name: {}.",
@@ -127,6 +150,18 @@ impl<'a> Store<'a> {
             .functions
             .into_iter()
             .map(|f| self.allocate_function(f, &module_instance))
+            .collect::<Result<Vec<_>>>()?;
+
+        let table_addresses = module
+            .tables
+            .into_iter()
+            .map(|t| self.allocate_table(t, Ref::Null))
+            .collect::<Result<Vec<_>>>()?;
+
+        let memory_addresses = module
+            .mems
+            .into_iter()
+            .map(|m| self.allocate_memory(m))
             .collect::<Result<Vec<_>>>()?;
 
         Ok(module_instance)

@@ -1,11 +1,10 @@
 use std::fmt::{Debug, Formatter};
-use std::rc::Rc;
 
 use crate::binary_grammar::{
     Function, FunctionType, GlobalType, Instruction, MemoryType, RefType, TableType,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum Ref {
     Null,
     FunctionAddr(usize),
@@ -64,7 +63,7 @@ pub enum FunctionInstance<'a> {
     },
     Host {
         function_type: FunctionType,
-        code: Rc<dyn Fn()>,
+        code: Box<dyn Fn()>,
     },
 }
 
@@ -96,9 +95,9 @@ pub struct TableInstance {
 }
 
 #[derive(Debug)]
-pub struct MemoryInstance<'a> {
+pub struct MemoryInstance {
     pub r#type: MemoryType,
-    pub data: &'a [u8],
+    pub data: Vec<u8>,
 }
 
 #[derive(Debug)]
@@ -119,9 +118,9 @@ pub struct DataInstance<'a> {
 }
 
 pub enum ImportValue {
-    // Wrap in Rc to convert a dynamically sized type into one with a statically known
+    // Wrap in Box to convert a dynamically sized type into one with a statically known
     // type.
-    Func(Rc<dyn Fn()>),
+    Func(Box<dyn Fn()>),
     Table(Vec<Ref>),
     Memory(Vec<u8>),
     Global(Value),
