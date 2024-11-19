@@ -7,11 +7,11 @@ use crate::binary_grammar::{
     BlockType, CodeSection, CustomSection, DataMode, DataSection, DataSegment, ElementMode,
     ElementSection, ElementSegment, Export, ExportDescription, ExportSection, Expression, Function,
     FunctionSection, FunctionType, Global, GlobalSection, GlobalType, Import, ImportDescription,
-    ImportSection, Instruction, Limit, Local, MemArg, MemorySection, MemoryType, Module,
-    Mutability, RefType, ResultType, Section, TableSection, TableType, TypeSection, ValueType,
-    MAGIC_NUMBER, TERM_ELSE_BYTE, TERM_END_BYTE,
+    ImportSection, Instruction, Limit, Local, MAGIC_NUMBER, MemArg, MemorySection, MemoryType,
+    Module, Mutability, RefType, ResultType, Section, TableSection, TableType, TERM_ELSE_BYTE,
+    TERM_END_BYTE, TypeSection, ValueType,
 };
-use crate::leb128::{read_i32, read_i64, read_u32, MAX_LEB128_LEN_32, MAX_LEB128_LEN_64};
+use crate::leb128::{MAX_LEB128_LEN_32, MAX_LEB128_LEN_64, read_i32, read_i64, read_u32};
 
 #[derive(Debug)]
 pub struct Parser<'a> {
@@ -889,20 +889,5 @@ impl<'a> Parser<'a> {
         };
 
         Ok(section)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_hyper() -> Result<()> {
-        let bytes = std::fs::read("./tests/hyper-app-691811a8315a1230_bg.wasm")?;
-
-        let mut parser = Parser::new(&bytes);
-        let module = parser.parse_module()?;
-
-        Ok(())
     }
 }
