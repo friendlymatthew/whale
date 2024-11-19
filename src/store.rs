@@ -1,12 +1,12 @@
 use anyhow::{anyhow, bail, ensure, Result};
 
 use crate::binary_grammar::{
-    DataSegment, ElementSegment, Function, Global, Import, ImportDescription, MemoryType, Module,
-    TableType,
+    DataSegment, ElementSegment, ExportDescription, Function, Global, Import, ImportDescription,
+    MemoryType, Module, TableType,
 };
 use crate::execution_grammar::{
-    DataInstance, ElementInstance, ExternalImport, FunctionInstance, GlobalInstance, ImportValue,
-    MemoryInstance, ModuleInstance, Ref, TableInstance, Value,
+    DataInstance, ElementInstance, ExportInstance, ExternalImport, ExternalValue, FunctionInstance,
+    GlobalInstance, ImportValue, MemoryInstance, ModuleInstance, Ref, TableInstance, Value,
 };
 
 #[derive(Debug)]
@@ -146,7 +146,62 @@ impl<'a> Store<'a> {
         initial_global_values: Vec<Value>,
         element_segment_refs: Vec<Vec<Ref>>,
     ) -> Result<ModuleInstance<'a>> {
-        let module_instance = ModuleInstance::new(module.types);
+        let mut module_instance = ModuleInstance::new(module.types);
+
+        module_instance.function_addrs = module
+            .functions
+            .into_iter()
+            .map(|f| self.allocate_function(f, &module_instance))
+            .collect::<Result<Vec<_>>>()?;
+
+        module_instance.table_addrs = module
+            .tables
+            .into_iter()
+            .map(|t| self.allocate_table(t, Ref::Null))
+            .collect::<Result<Vec<_>>>()?;
+
+        module_instance.mem_addrs = module
+            .mems
+            .into_iter()
+            .map(|m| self.allocate_memory(m))
+            .collect::<Result<Vec<_>>>()?;
+
+        ensure!(
+            module.globals.len() == initial_global_values.len(),
+            "Expected equal number of elements for globals and global initializer values."
+        );
+
+        module_instance.global_addrs = module
+            .globals
+            .into_iter()
+            .zip(initial_global_values)
+            .map(|(g, initial_global_values)| self.allocate_global(g, initial_global_values))
+            .collect::<Result<Vec<_>>>()?;
+
+        ensure!(
+            module.element_segments.len() == element_segment_refs.len(),
+            "Expected equal number of element segments for initial element segment refs"
+        );
+
+        module_instance.elem_addrs = module
+            .element_segments
+            .into_iter()
+            .zip(element_segment_refs)
+            .map(|(element_segment, element_segment_ref)| {
+                self.allocate_element_segment(element_segment, element_segment_ref)
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        module_instance.data_addrs = module
+            .data_segments
+            .into_iter()
+            .map(|data_segment| self.allocate_data_instance(data_segment))
+            .collect::<Result<Vec<_>>>()?;
+
+        let pre_import_func_addr_len = module_instance.function_addrs.len();
+        let pre_import_table_addr_len = module_instance.table_addrs.len();
+        let pre_import_mem_addr_len = module_instance.mem_addrs.len();
+        let pre_import_global_addr_len = module_instance.global_addrs.len();
 
         for import in module.imports {
             let Import {
@@ -166,16 +221,25 @@ impl<'a> Store<'a> {
 
                 match (value, description) {
                     (ImportValue::Func(f), ImportDescription::Func(f_idx)) => {
-                        let host_function_address =
-                            self.allocate_host_function(f, f_idx, &module_instance)?;
+                        module_instance
+                            .function_addrs
+                            .push(self.allocate_host_function(f, f_idx, &module_instance)?);
                     }
-                    (ImportValue::Global(g), ImportDescription::Global(g_type)) => {
-                        todo!("Do I need to trim off initial_global_values as well for this?")
+                    (ImportValue::Global(value), ImportDescription::Global(global_type)) => {
+                        let global_addr = self.globals.len();
+                        self.globals.push(GlobalInstance { global_type, value });
+                        module_instance.global_addrs.push(global_addr)
                     }
-                    (ImportValue::Table(t), ImportDescription::Table(t_type)) => {
-                        let table_addresses = self.allocate_table(t_type, Ref::Null)?;
+                    (ImportValue::Table(elem), ImportDescription::Table(table_type)) => {
+                        let table_addr = self.tables.len();
+                        self.tables.push(TableInstance { table_type, elem });
+                        module_instance.table_addrs.push(table_addr);
                     }
-                    (ImportValue::Memory(m), ImportDescription::Mem(m_type)) => {}
+                    (ImportValue::Memory(data), ImportDescription::Mem(memory_type)) => {
+                        let memory_addr = self.memories.len();
+                        self.memories.push(MemoryInstance { memory_type, data });
+                        module_instance.mem_addrs.push(memory_addr);
+                    }
                     _ => bail!("Mismatched type. todo! impl Debug for ImportValue."),
                 }
             } else {
@@ -187,55 +251,27 @@ impl<'a> Store<'a> {
             }
         }
 
-        let function_addresses = module
-            .functions
-            .into_iter()
-            .map(|f| self.allocate_function(f, &module_instance))
-            .collect::<Result<Vec<_>>>()?;
+        for export in module.exports {
+            let extern_value = match export.description {
+                ExportDescription::Func(f_i) => ExternalValue::Function {
+                    addr: module_instance.function_addrs[pre_import_func_addr_len + f_i as usize],
+                },
+                ExportDescription::Table(t_i) => ExternalValue::Table {
+                    addr: module_instance.table_addrs[pre_import_table_addr_len + t_i as usize],
+                },
+                ExportDescription::Mem(m_i) => ExternalValue::Memory {
+                    addr: module_instance.mem_addrs[pre_import_mem_addr_len + m_i as usize],
+                },
+                ExportDescription::Global(g_i) => ExternalValue::Global {
+                    addr: module_instance.global_addrs[pre_import_global_addr_len + g_i as usize],
+                },
+            };
 
-        let table_addresses = module
-            .tables
-            .into_iter()
-            .map(|t| self.allocate_table(t, Ref::Null))
-            .collect::<Result<Vec<_>>>()?;
-
-        let memory_addresses = module
-            .mems
-            .into_iter()
-            .map(|m| self.allocate_memory(m))
-            .collect::<Result<Vec<_>>>()?;
-
-        ensure!(
-            module.globals.len() == initial_global_values.len(),
-            "Expected equal number of elements for globals and global initializer values."
-        );
-
-        let global_addresses = module
-            .globals
-            .into_iter()
-            .zip(initial_global_values)
-            .map(|(g, initial_global_values)| self.allocate_global(g, initial_global_values))
-            .collect::<Result<Vec<_>>>();
-
-        ensure!(
-            module.element_segments.len() == element_segment_refs.len(),
-            "Expected equal number of element segments for initial element segment refs"
-        );
-
-        let element_addresses = module
-            .element_segments
-            .into_iter()
-            .zip(element_segment_refs)
-            .map(|(element_segment, element_segment_ref)| {
-                self.allocate_element_segment(element_segment, element_segment_ref)
-            })
-            .collect::<Result<Vec<_>>>();
-
-        let data_addresses = module
-            .data_segments
-            .into_iter()
-            .map(|data_segment| self.allocate_data_instance(data_segment))
-            .collect::<Result<Vec<_>>>()?;
+            module_instance.exports.push(ExportInstance {
+                name: export.name,
+                value: extern_value,
+            });
+        }
 
         Ok(module_instance)
     }
