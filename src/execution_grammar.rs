@@ -1,7 +1,9 @@
 use std::fmt::{Debug, Formatter};
 
+use anyhow::ensure;
+
 use crate::binary_grammar::{
-    Function, FunctionType, GlobalType, Instruction, MemoryType, RefType, TableType,
+    Function, FunctionType, GlobalType, Instruction, MemoryType, RefType, TableType, ValueType,
 };
 
 #[derive(Debug, Copy, Clone)]
@@ -11,7 +13,7 @@ pub enum Ref {
     RefExtern(usize),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Value {
     I32(i32),
     I64(i64),
@@ -19,6 +21,19 @@ pub enum Value {
     F64(f64),
     V128(i128),
     Ref(Ref),
+}
+
+impl Value {
+    pub fn default(value_type: ValueType) -> Self {
+        match value_type {
+            ValueType::I32 => Value::I32(0),
+            ValueType::I64 => Value::I64(0),
+            ValueType::F32 => Value::F32(0.0),
+            ValueType::F64 => Value::F64(0.0),
+            ValueType::V128 => Value::V128(0),
+            ValueType::Ref(_) => Value::Ref(Ref::Null),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -52,6 +67,12 @@ impl<'a> ModuleInstance<'a> {
             data_addrs: vec![],
             exports: vec![],
         }
+    }
+}
+
+impl<'a> Default for ModuleInstance<'a> {
+    fn default() -> Self {
+        Self::new(vec![])
     }
 }
 
@@ -160,42 +181,46 @@ pub struct ExportInstance<'a> {
 
 #[derive(Debug)]
 pub struct Label {
-    arity: u32,
-    target: Vec<Instruction>,
+    pub arity: u32,
+    pub continuation: Vec<Instruction>,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct Frame<'a> {
+    pub arity: usize,
+    pub locals: Vec<Value>,
+    pub module: ModuleInstance<'a>,
 }
 
 #[derive(Debug)]
-pub struct FrameState<'a> {
-    locals: Vec<Value>,
-    module: ModuleInstance<'a>,
-}
-
-#[derive(Debug)]
-pub struct ActivationFrame<'a> {
-    arity: u32,
-    state: FrameState<'a>,
-}
-
-#[derive(Debug)]
-pub enum StackEntry<'a> {
+pub enum Entry<'a> {
     Value(Value),
     Label(Label),
-    Activation(ActivationFrame<'a>),
+    Activation(Frame<'a>),
 }
 
 #[derive(Debug)]
-pub struct Stack<'a>(Vec<StackEntry<'a>>);
+pub struct Stack<'a>(Vec<Entry<'a>>);
 
 impl<'a> Stack<'a> {
     pub fn new() -> Self {
         Self(vec![])
     }
 
-    pub fn push(&mut self, entry: StackEntry<'a>) {
+    pub fn push(&mut self, entry: Entry<'a>) {
         self.0.push(entry);
     }
 
-    pub fn pop(&mut self) -> Option<StackEntry<'a>> {
+    pub fn pop(&mut self) -> Option<Entry<'a>> {
         self.0.pop()
+    }
+
+    pub fn pop_n(&mut self, n: usize) -> anyhow::Result<Vec<Entry<'a>>> {
+        ensure!(self.len() >= n, "Stack must have at least {} entries", n);
+        Ok(self.0.split_off(self.len() - n))
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
     }
 }
