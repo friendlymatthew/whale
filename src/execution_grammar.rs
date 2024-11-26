@@ -24,7 +24,7 @@ pub enum Value {
 }
 
 impl Value {
-    pub fn default(value_type: ValueType) -> Self {
+    pub fn default(value_type: &ValueType) -> Self {
         match value_type {
             ValueType::I32 => Value::I32(0),
             ValueType::I64 => Value::I64(0),
@@ -37,7 +37,7 @@ impl Value {
 }
 
 #[derive(Debug)]
-pub enum Result {
+pub enum ResultKind {
     Values(Vec<Value>),
     Trap,
 }

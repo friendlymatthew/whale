@@ -1,6 +1,6 @@
 use anyhow::{anyhow, bail, ensure, Result};
 
-use crate::binary_grammar::{Expression, RefType, ValueType};
+use crate::binary_grammar::{Instruction, RefType, ValueType};
 use crate::execution_grammar::{
     Entry, ExternalImport, Frame, FunctionInstance, Label, ModuleInstance, Ref, Stack, Value,
 };
@@ -80,7 +80,7 @@ impl<'a> Interpreter<'a> {
         Ok(())
     }
 
-    fn invoke_expression(&mut self, expression: Vec<Expression>, frame: Frame<'a>) -> Result<()> {
+    fn invoke_expression(&mut self, expression: Vec<Instruction>, frame: Frame<'a>) -> Result<()> {
         Ok(())
     }
 
@@ -94,26 +94,37 @@ impl<'a> Interpreter<'a> {
                 module,
             } => {
                 let num_args = function_type.0 .0.len();
-                ensure!(self.stack.len() >= num_args, "At least {num_args} values must be on top of the stack".);
+                ensure!(
+                    self.stack.len() >= num_args,
+                    "At least {num_args} values must be on top of the stack"
+                );
 
                 let mut locals = self.stack.pop_n(num_args)?;
 
                 code.locals
                     .iter()
-                    .for_each(|&local| locals.push(Entry::Value(Value::default(local.value_type))));
+                    .for_each(|local| locals.push(Entry::Value(Value::default(&local.value_type))));
+
+                let locals = locals
+                    .into_iter()
+                    .map(|entry| match entry {
+                        Entry::Value(v) => Ok(v),
+                        _ => Err(anyhow!("Expected entry off the stack to be a value.")),
+                    })
+                    .collect::<Result<Vec<_>>>()?;
 
                 let num_ret_args = function_type.1 .0.len();
 
                 let f = Frame {
                     arity: num_ret_args,
                     locals,
-                    module,
+                    module: module.clone(),
                 };
 
                 self.stack.push(Entry::Activation(f.clone()));
 
                 let l = Label {
-                    arity: num_ret_args,
+                    arity: num_ret_args as u32,
                     continuation: code.body.clone(),
                 };
 

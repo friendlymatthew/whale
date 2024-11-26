@@ -170,7 +170,7 @@ pub struct MemorySection {
 #[derive(Debug)]
 pub struct Global {
     pub global_type: GlobalType,
-    pub initial_expression: Expression,
+    pub initial_expression: Vec<Instruction>,
 }
 
 #[derive(Debug)]
@@ -180,25 +180,23 @@ pub struct GlobalSection {
 
 // Instructions
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum BlockType {
     Empty,
     SingleValue(ValueType),
     TypeIndex(i32),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MemArg {
     pub align: u32,
     pub offset: u32,
 }
 
-pub type Expression = Vec<Instruction>;
-
 pub const TERM_END_BYTE: u8 = 0x0B;
 pub const TERM_ELSE_BYTE: u8 = 0x05;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Instruction {
     Unreachable,
     Nop,
@@ -660,7 +658,7 @@ pub enum ElementMode {
     Passive,
     Active {
         table_index: u32,
-        offset: Expression,
+        offset: Vec<Instruction>,
     },
     Declarative,
 }
@@ -668,7 +666,7 @@ pub enum ElementMode {
 #[derive(Debug)]
 pub struct ElementSegment {
     pub ref_type: RefType,
-    pub expression: Vec<Expression>,
+    pub expression: Vec<Vec<Instruction>>,
     pub mode: ElementMode,
 }
 
@@ -687,7 +685,7 @@ pub struct Local {
 pub struct Function {
     pub type_index: u32,
     pub locals: Vec<Local>,
-    pub body: Expression,
+    pub body: Vec<Instruction>,
 }
 
 #[derive(Debug)]
@@ -697,7 +695,10 @@ pub struct CodeSection {
 
 #[derive(Debug)]
 pub enum DataMode {
-    Active { memory: u32, offset: Expression },
+    Active {
+        memory: u32,
+        offset: Vec<Instruction>,
+    },
     Passive,
 }
 

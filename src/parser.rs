@@ -5,7 +5,7 @@ use anyhow::{anyhow, bail, ensure, Result};
 
 use crate::binary_grammar::{
     BlockType, CodeSection, CustomSection, DataMode, DataSection, DataSegment, ElementMode,
-    ElementSection, ElementSegment, Export, ExportDescription, ExportSection, Expression, Function,
+    ElementSection, ElementSegment, Export, ExportDescription, ExportSection, Function,
     FunctionSection, FunctionType, Global, GlobalSection, GlobalType, Import, ImportDescription,
     ImportSection, Instruction, Limit, Local, MAGIC_NUMBER, MemArg, MemorySection, MemoryType,
     Module, Mutability, RefType, ResultType, Section, TableSection, TableType, TERM_ELSE_BYTE,
@@ -289,7 +289,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_expression(&mut self) -> Result<Expression> {
+    fn parse_expression(&mut self) -> Result<Vec<Instruction>> {
         let mut instructions = vec![];
 
         loop {
