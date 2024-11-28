@@ -1,6 +1,6 @@
 use std::fmt::{Debug, Formatter};
 
-use anyhow::ensure;
+use anyhow::{anyhow, bail, ensure, Result};
 
 use crate::binary_grammar::{
     Function, FunctionType, GlobalType, Instruction, MemoryType, RefType, TableType, ValueType,
@@ -35,6 +35,36 @@ impl Value {
         }
     }
 }
+
+#[macro_export]
+macro_rules! try_from_value {
+    ($value_variant: ident, $ty:ty) => {
+        impl TryFrom<Value> for $ty {
+            type Error = anyhow::Error;
+
+            fn try_from(value: Value) -> std::result::Result<Self, Self::Error> {
+                match value {
+                    Value::$value_variant(v) => Ok(v),
+                    _ => bail!(""),
+                }
+            }
+        }
+
+        impl TryFrom<$ty> for Value {
+            type Error = anyhow::Error;
+
+            fn try_from(value: $ty) -> std::result::Result<Self, Self::Error> {
+                Ok(Value::$value_variant(value))
+            }
+        }
+    };
+}
+
+try_from_value!(I32, i32);
+try_from_value!(I64, i64);
+try_from_value!(F32, f32);
+try_from_value!(F64, f64);
+try_from_value!(V128, i128);
 
 #[derive(Debug)]
 pub enum ResultKind {
@@ -211,11 +241,25 @@ impl<'a> Stack<'a> {
         self.0.push(entry);
     }
 
-    pub fn pop(&mut self) -> Option<Entry<'a>> {
-        self.0.pop()
+    pub fn push_value<T: TryInto<Value, Error = anyhow::Error>>(&mut self, value: T) -> Result<()> {
+        self.push(Entry::Value(value.try_into()?));
+
+        Ok(())
     }
 
-    pub fn pop_n(&mut self, n: usize) -> anyhow::Result<Vec<Entry<'a>>> {
+    pub fn pop(&mut self) -> Result<Entry<'a>> {
+        self.0.pop().ok_or(anyhow!("Empty stack."))
+    }
+
+    pub fn pop_as_value<T: TryFrom<Value, Error = anyhow::Error>>(&mut self) -> Result<T> {
+        if let Entry::Value(v) = self.pop()? {
+            v.try_into()
+        } else {
+            bail!("Failed to pop entry as value.")
+        }
+    }
+
+    pub fn pop_n(&mut self, n: usize) -> Result<Vec<Entry<'a>>> {
         ensure!(self.len() >= n, "Stack must have at least {} entries", n);
         Ok(self.0.split_off(self.len() - n))
     }
