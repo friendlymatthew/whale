@@ -1,6 +1,5 @@
-use std::ops::Neg;
-
 use anyhow::{anyhow, bail, ensure, Result};
+use std::ops::Neg;
 
 use crate::binary_grammar::{Instruction, RefType, ValueType};
 use crate::execution_grammar::{
@@ -18,6 +17,12 @@ pub struct Interpreter<'a> {
 }
 
 impl<'a> Interpreter<'a> {
+    pub fn execute(file_bytes: &'a [u8]) -> Result<()> {
+        let _interpreter = Self::new(file_bytes, vec![], vec![], vec![])?;
+
+        Ok(())
+    }
+
     pub fn new(
         module_data: &'a [u8],
         imports: Vec<ExternalImport>,
