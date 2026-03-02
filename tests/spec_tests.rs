@@ -1,7 +1,7 @@
 use gabagool::{
-    AddrType, CompositeType, ExternalValue, FunctionInstance, FunctionType,
-    GlobalInstance, GlobalType, ImportDescription, Interpreter, Limit, MemoryInstance, MemoryType,
-    Parser, Ref, Store, Value, ValueType,
+    AddrType, CompositeType, ExternalValue, FunctionInstance, GlobalInstance, GlobalType,
+    ImportDescription, Interpreter, Limit, MemoryInstance, MemoryType, Parser, Ref, Store, Value,
+    ValueType,
 };
 
 #[derive(Debug)]
@@ -98,7 +98,10 @@ fn spec_step_assert_return(
     step: usize,
     failures: &mut Vec<String>,
 ) {
-    match interp.invoke(name, args.to_vec()).and_then(|s| s.into_completed()) {
+    match interp
+        .invoke(name, args.to_vec())
+        .and_then(|s| s.into_completed())
+    {
         Ok(actual) => {
             if !values_match(expected, &actual) {
                 failures.push(format!(
@@ -123,14 +126,14 @@ fn spec_step_assert_trap(
     step: usize,
     failures: &mut Vec<String>,
 ) {
-    match interp.invoke(name, args.to_vec()).and_then(|s| s.into_completed()) {
-        Ok(results) => {
-            failures.push(format!(
-                "step {} assert_trap(\"{}\", {:?}): expected trap, got {:?}",
-                step, name, args, results
-            ));
-        }
-        Err(_) => {}
+    if let Ok(results) = interp
+        .invoke(name, args.to_vec())
+        .and_then(|s| s.into_completed())
+    {
+        failures.push(format!(
+            "step {} assert_trap(\"{}\", {:?}): expected trap, got {:?}",
+            step, name, args, results
+        ));
     }
 }
 

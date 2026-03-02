@@ -185,7 +185,7 @@ impl Store {
         }
 
         // step 7
-        let function_addresses = (0..module.functions.len()).map(|i| self.functions.len() + i);
+        let _function_addresses = (0..module.functions.len()).map(|i| self.functions.len() + i);
 
         // step 8-24 are just extracting fields
 

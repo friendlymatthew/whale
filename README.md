@@ -42,7 +42,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 # Status
 
-`gabagool` is tested against the [WebAssembly spec test suite](https://github.com/WebAssembly/spec/tree/main/test/core). Each test is a compiled wasm module. It currently passes 509 modules out of 1,016 (50%).
+`gabagool` is tested against the [WebAssembly spec test suite](https://github.com/WebAssembly/spec/tree/main/test/core). Each test is a compiled wasm module. It currently passes 734 modules out of 1,072 (68%).
 
 ```sh
 # run the test suite
@@ -56,3 +56,5 @@ cargo r -- stair_climb.wasm stair_climb 20
 # Reading
 
 https://webassembly.github.io/spec/core/<br>
+https://github.com/bytecodealliance/wasmtime/issues/3017<br>
+https://github.com/bytecodealliance/wasmtime/issues/4002<br>

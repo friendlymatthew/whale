@@ -157,7 +157,7 @@ impl Interpreter {
         // step 11-13: global types/exprs are consumed in step 19 and step 24
 
         // step 14-15
-        let elem_exprs = module.element_segments.iter().map(|e| &e.expression);
+        let _elem_exprs = module.element_segments.iter().map(|e| &e.expression);
 
         let mut stack = Stack::default();
 

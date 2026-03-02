@@ -1,14 +1,13 @@
 use std::fmt::{Debug, Formatter};
 
 use anyhow::{anyhow, bail, ensure, Result};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 use crate::binary_grammar::{
-    Function, FunctionType, GlobalType, ImportDescription, MemoryType, RefType,
-    SubType, TableType, ValueType,
+    Function, FunctionType, GlobalType, MemoryType, RefType, SubType, TableType, ValueType,
 };
 
-#[derive(Debug, Copy, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Ref {
     Null,
     FunctionAddr(usize),
@@ -28,12 +27,12 @@ pub enum Value {
 impl Value {
     pub const fn default(value_type: &ValueType) -> Self {
         match value_type {
-            ValueType::I32 => Value::I32(0),
-            ValueType::I64 => Value::I64(0),
-            ValueType::F32 => Value::F32(0.0),
-            ValueType::F64 => Value::F64(0.0),
-            ValueType::V128 => Value::V128(0),
-            ValueType::Ref(_) => Value::Ref(Ref::Null),
+            ValueType::I32 => Self::I32(0),
+            ValueType::I64 => Self::I64(0),
+            ValueType::F32 => Self::F32(0.0),
+            ValueType::F64 => Self::F64(0.0),
+            ValueType::V128 => Self::V128(0),
+            ValueType::Ref(_) => Self::Ref(Ref::Null),
         }
     }
 }
@@ -150,15 +149,16 @@ impl Serialize for FunctionInstance {
                 module,
                 code,
             } => {
-                let mut sv = serializer.serialize_struct_variant("FunctionInstance", 0, "Local", 3)?;
+                let mut sv =
+                    serializer.serialize_struct_variant("FunctionInstance", 0, "Local", 3)?;
                 sv.serialize_field("function_type", function_type)?;
                 sv.serialize_field("module", module)?;
                 sv.serialize_field("code", code)?;
                 sv.end()
             }
-            Self::Host { .. } => {
-                Err(serde::ser::Error::custom("cannot serialize Host function instance"))
-            }
+            Self::Host { .. } => Err(serde::ser::Error::custom(
+                "cannot serialize Host function instance",
+            )),
         }
     }
 }
