@@ -1,0 +1,162 @@
+use gabagool::{
+    AddrType, CompositeType, ExternalValue, FunctionInstance, FunctionType, GlobalInstance,
+    GlobalType, ImportDescription, Interpreter, Limit, MemoryInstance, MemoryType, Parser, Ref,
+    Store, Value, ValueType,
+};
+
+#[derive(Debug)]
+enum NanPat<T> {
+    CanonicalNan,
+    ArithmeticNan,
+    Value(T),
+}
+
+#[derive(Debug)]
+enum ExpectedValue {
+    I32(i32),
+    I64(i64),
+    F32(NanPat<u32>),
+    F64(NanPat<u64>),
+}
+
+fn setup_spectest_imports<'a>(store: &mut Store<'a>, wasm_bytes: &'a [u8]) -> Vec<ExternalValue> {
+    let module = Parser::new(wasm_bytes).parse_module().unwrap();
+    module
+        .import_declarations
+        .iter()
+        .map(|import| match &import.description {
+            ImportDescription::Global(gt) => {
+                let value = match gt.value_type {
+                    ValueType::I32 => Value::I32(666),
+                    ValueType::I64 => Value::I64(666),
+                    ValueType::F32 => Value::F32(666.6),
+                    ValueType::F64 => Value::F64(666.6),
+                    _ => Value::I32(0),
+                };
+                let addr = store.globals.len();
+                store.globals.push(GlobalInstance {
+                    global_type: GlobalType {
+                        value_type: gt.value_type.clone(),
+                        mutability: gt.mutability.clone(),
+                    },
+                    value,
+                });
+                ExternalValue::Global { addr }
+            }
+            ImportDescription::Mem(mt) => {
+                let addr = store.memories.len();
+                let pages = mt.limit.min as usize;
+                store.memories.push(MemoryInstance {
+                    memory_type: MemoryType {
+                        addr_type: mt.addr_type,
+                        limit: Limit {
+                            min: mt.limit.min,
+                            max: mt.limit.max,
+                        },
+                    },
+                    data: vec![0u8; pages * 65536],
+                });
+                ExternalValue::Memory { addr }
+            }
+            ImportDescription::Table(_) => {
+                let addr = store.tables.len();
+                store.tables.push(gabagool::TableInstance {
+                    table_type: gabagool::TableType {
+                        element_reference_type: gabagool::RefType::FuncRef,
+                        addr_type: AddrType::I32,
+                        limit: Limit { min: 10, max: 20 },
+                    },
+                    elem: vec![Ref::Null; 10],
+                });
+                ExternalValue::Table { addr }
+            }
+            ImportDescription::Func(type_idx) => {
+                let addr = store.functions.len();
+                let function_type = match &module.types[*type_idx as usize].composite_type {
+                    CompositeType::Func(ft) => ft.clone(),
+                    _ => panic!("expected function type at index {}", type_idx),
+                };
+                store.functions.push(FunctionInstance::Host {
+                    function_type,
+                    code: Box::new(|| {}),
+                });
+                ExternalValue::Function { addr }
+            }
+            ImportDescription::Tag(_) => {
+                let addr = store.tags.len();
+                ExternalValue::Tag { addr }
+            }
+        })
+        .collect()
+}
+
+fn spec_step_assert_return(
+    interp: &mut Interpreter,
+    name: &str,
+    args: &[Value],
+    expected: &[ExpectedValue],
+    step: usize,
+    failures: &mut Vec<String>,
+) {
+    match interp.invoke_export(name, args.to_vec()) {
+        Ok(actual) => {
+            if !values_match(expected, &actual) {
+                failures.push(format!(
+                    "step {} assert_return(\"{}\", {:?}): expected {:?}, got {:?}",
+                    step, name, args, expected, actual
+                ));
+            }
+        }
+        Err(e) => {
+            failures.push(format!(
+                "step {} assert_return(\"{}\", {:?}): unexpected trap: {}",
+                step, name, args, e
+            ));
+        }
+    }
+}
+
+fn spec_step_assert_trap(
+    interp: &mut Interpreter,
+    name: &str,
+    args: &[Value],
+    step: usize,
+    failures: &mut Vec<String>,
+) {
+    match interp.invoke_export(name, args.to_vec()) {
+        Ok(result) => {
+            failures.push(format!(
+                "step {} assert_trap(\"{}\", {:?}): expected trap, got {:?}",
+                step, name, args, result
+            ));
+        }
+        Err(_) => {}
+    }
+}
+
+fn values_match(expected: &[ExpectedValue], actual: &[Value]) -> bool {
+    if expected.len() != actual.len() {
+        return false;
+    }
+
+    expected
+        .iter()
+        .zip(actual.iter())
+        .all(|(exp, act)| match (exp, act) {
+            (ExpectedValue::I32(e), Value::I32(a)) => e == a,
+            (ExpectedValue::I64(e), Value::I64(a)) => e == a,
+            (ExpectedValue::F32(pat), Value::F32(a)) => match pat {
+                NanPat::CanonicalNan => a.is_nan() && (a.to_bits() & 0x003F_FFFF == 0),
+                NanPat::ArithmeticNan => a.is_nan(),
+                NanPat::Value(e) => a.to_bits() == *e,
+            },
+            (ExpectedValue::F64(pat), Value::F64(a)) => match pat {
+                NanPat::CanonicalNan => a.is_nan() && (a.to_bits() & 0x0007_FFFF_FFFF_FFFF == 0),
+                NanPat::ArithmeticNan => a.is_nan(),
+                NanPat::Value(e) => a.to_bits() == *e,
+            },
+            _ => false,
+        })
+}
+
+include!(concat!(env!("OUT_DIR"), "/spec_tests_generated.rs"));

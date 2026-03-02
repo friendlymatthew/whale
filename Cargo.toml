@@ -1,7 +1,22 @@
 [package]
-name = "whale"
+name = "gabagool"
 version = "0.1.0"
+description = "a WASM interpreter"
 edition = "2021"
+authors = ["friendlymatthew"]
+license = "MIT"
 
 [dependencies]
 anyhow = "1"
+
+[profile.release]
+debug = 1
+panic = "abort"
+lto = true
+codegen-units = 1
+
+[build-dependencies]
+wast = { version = "245.0.1", optional = true }
+
+[features]
+spec-tests = ["wast"]
