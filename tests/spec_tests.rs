@@ -1,5 +1,5 @@
 use gabagool::{
-    AddrType, CompositeType, ExecutionState, ExternalValue, FunctionInstance, FunctionType,
+    AddrType, CompositeType, ExternalValue, FunctionInstance, FunctionType,
     GlobalInstance, GlobalType, ImportDescription, Interpreter, Limit, MemoryInstance, MemoryType,
     Parser, Ref, Store, Value, ValueType,
 };
@@ -98,8 +98,8 @@ fn spec_step_assert_return(
     step: usize,
     failures: &mut Vec<String>,
 ) {
-    match interp.invoke_export(name, args.to_vec()) {
-        Ok(ExecutionState::Completed(actual)) => {
+    match interp.invoke(name, args.to_vec()).and_then(|s| s.into_completed()) {
+        Ok(actual) => {
             if !values_match(expected, &actual) {
                 failures.push(format!(
                     "step {} assert_return(\"{}\", {:?}): expected {:?}, got {:?}",
@@ -107,15 +107,9 @@ fn spec_step_assert_return(
                 ));
             }
         }
-        Ok(ExecutionState::FuelExhausted) => {
-            failures.push(format!(
-                "step {} assert_return(\"{}\", {:?}): unexpected fuel exhaustion",
-                step, name, args
-            ));
-        }
         Err(e) => {
             failures.push(format!(
-                "step {} assert_return(\"{}\", {:?}): unexpected trap: {}",
+                "step {} assert_return(\"{}\", {:?}): unexpected error: {}",
                 step, name, args, e
             ));
         }
@@ -129,11 +123,11 @@ fn spec_step_assert_trap(
     step: usize,
     failures: &mut Vec<String>,
 ) {
-    match interp.invoke_export(name, args.to_vec()) {
-        Ok(state) => {
+    match interp.invoke(name, args.to_vec()).and_then(|s| s.into_completed()) {
+        Ok(results) => {
             failures.push(format!(
                 "step {} assert_trap(\"{}\", {:?}): expected trap, got {:?}",
-                step, name, args, state
+                step, name, args, results
             ));
         }
         Err(_) => {}

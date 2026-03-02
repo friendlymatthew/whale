@@ -2,24 +2,55 @@
 
 A WebAssembly interpreter written from scratch.
 
-This project aims to build a fully spec-compliant interpreter whose entire execution state can be serialized, suspended, and restored. This enables fast cold starts, cross-machine migrations, deterministic replay, and time-travel debugging.
+This project aims to build a fully spec-compliant interpreter whose entire execution state can be serialized, suspended, and restored.
 
-```sh
-# write your module in WAT
-cat stair_climb.wat
-# compile to wasm (requires wabt: brew install wabt)
-wat2wasm stair_climb.wat -o stair_climb.wasm
+```rs
+use gabagool::{ExecutionState, Interpreter, Value};
 
-cargo r -- stair_climb.wasm stair_climb 20
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let wasm_bytes = std::fs::read("stair_climb.wasm")?;
+
+    // run to completion as a reference
+    let mut reference = Interpreter::new(&wasm_bytes)?;
+    let full_result = reference
+        .invoke("stair_climb", vec![Value::I32(4)])?
+        .into_completed()?;
+
+    // run with limited fuel
+    // execution suspends when fuel runs out
+    let mut interp = Interpreter::new(&wasm_bytes)?;
+    interp.set_fuel(50);
+
+    let state = interp
+        .invoke("stair_climb", vec![Value::I32(4)])?;
+    assert_eq!(state, ExecutionState::FuelExhausted);
+
+    // snapshot the suspended interpreter to bytes
+    let snapshot = interp.snapshot()?;
+
+    // restored on another machine, in another process, whatever
+    let mut restored = Interpreter::from_snapshot(&snapshot)?;
+    restored.set_fuel(10000);
+
+    let resumed_result = restored.resume()?.into_completed()?;
+
+    assert_eq!(full_result, resumed_result);
+
+    Ok(())
+}
 ```
 
 # Status
 
-`gabagool` is tested against the [WebAssembly spec test suite](https://github.com/WebAssembly/spec/tree/main/test/core), which generates 32,490 individual assertions from the official `.wast` files. It currently passes 16,353.
+`gabagool` is tested against the [WebAssembly spec test suite](https://github.com/WebAssembly/spec/tree/main/test/core). Each test is a compiled wasm module. It currently passes 509 modules out of 1,016 (50%).
 
 ```sh
+# run the test suite
 uv run download-spec-tests.py
 cargo t --features spec-tests
+
+# run an example wasm program
+cargo r -- stair_climb.wasm stair_climb 20
 ```
 
 # Reading

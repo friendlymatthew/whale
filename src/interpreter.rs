@@ -1,5 +1,5 @@
 use anyhow::{anyhow, bail, ensure, Result};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use std::mem;
 use std::ops::Neg;
 
@@ -17,6 +17,15 @@ use crate::Store;
 pub enum ExecutionState {
     Completed(Vec<Value>),
     FuelExhausted,
+}
+
+impl ExecutionState {
+    pub fn into_completed(self) -> Result<Vec<Value>> {
+        match self {
+            Self::Completed(v) => Ok(v),
+            Self::FuelExhausted => bail!("execution paused: fuel exhausted"),
+        }
+    }
 }
 
 enum RunOutcome {
@@ -59,6 +68,10 @@ pub struct Interpreter {
 }
 
 impl Interpreter {
+    pub fn new(module_data: &[u8]) -> Result<Self> {
+        Self::instantiate(Store::new(), module_data, vec![])
+    }
+
     pub fn instantiate(
         mut store: Store,
         module_data: &[u8],
@@ -205,39 +218,17 @@ impl Interpreter {
         })
     }
 
-    pub fn get_func_param_types(&self, function_addr: usize) -> Result<Vec<ValueType>> {
-        let function_instance =
-            self.store.functions.get(function_addr).ok_or_else(|| {
-                anyhow!("Function address {} does not exist in store", function_addr)
-            })?;
-
-        match function_instance {
-            FunctionInstance::Local { function_type, .. }
-            | FunctionInstance::Host { function_type, .. } => Ok(function_type.0 .0.clone()),
-        }
+    pub fn snapshot(&self) -> Result<Vec<u8>> {
+        serde_json::to_vec(self).map_err(|e| anyhow!("snapshot failed: {}", e))
     }
 
-    pub fn get_export_func_addr(&self, name: &str) -> Result<usize> {
-        let module = self
-            .module_instances
-            .first()
-            .ok_or_else(|| anyhow!("No module instance"))?;
-
-        for export in &module.exports {
-            if export.name == name {
-                if let ExternalValue::Function { addr } = export.value {
-                    return Ok(addr);
-                }
-                bail!("Export '{}' is not a function", name);
-            }
-        }
-
-        bail!("Export '{}' not found", name)
+    pub fn from_snapshot(bytes: &[u8]) -> Result<Self> {
+        serde_json::from_slice(bytes).map_err(|e| anyhow!("restore failed: {}", e))
     }
 
-    pub fn invoke_export(&mut self, name: &str, args: Vec<Value>) -> Result<ExecutionState> {
+    pub fn invoke(&mut self, name: &str, args: Vec<Value>) -> Result<ExecutionState> {
         let addr = self.get_export_func_addr(name)?;
-        self.invoke(addr, args)
+        self.invoke_by_addr(addr, args)
     }
 
     pub fn resume(&mut self) -> Result<ExecutionState> {
@@ -269,31 +260,66 @@ impl Interpreter {
         }
     }
 
-    pub fn set_fuel(&mut self, fuel: u64) {
+    pub fn get_param_types(&self, name: &str) -> Result<Vec<ValueType>> {
+        let addr = self.get_export_func_addr(name)?;
+        self.get_func_param_types(addr)
+    }
+
+    pub const fn is_paused(&self) -> bool {
+        self.pending_arity.is_some()
+    }
+
+    pub const fn set_fuel(&mut self, fuel: u64) {
         self.fuel = Some(fuel);
     }
 
-    pub fn fuel(&self) -> Option<u64> {
+    pub const fn fuel(&self) -> Option<u64> {
         self.fuel
     }
 
-    pub fn store(&self) -> &Store {
+    pub const fn store(&self) -> &Store {
         &self.store
     }
 
-    pub fn store_mut(&mut self) -> &mut Store {
+    pub const fn store_mut(&mut self) -> &mut Store {
         &mut self.store
     }
 
-    pub fn snapshot(&self) -> Result<Vec<u8>> {
-        serde_json::to_vec(self).map_err(|e| anyhow!("snapshot failed: {}", e))
+    fn get_func_param_types(&self, function_addr: usize) -> Result<Vec<ValueType>> {
+        let function_instance =
+            self.store.functions.get(function_addr).ok_or_else(|| {
+                anyhow!("Function address {} does not exist in store", function_addr)
+            })?;
+
+        match function_instance {
+            FunctionInstance::Local { function_type, .. }
+            | FunctionInstance::Host { function_type, .. } => Ok(function_type.0 .0.clone()),
+        }
     }
 
-    pub fn from_snapshot(bytes: &[u8]) -> Result<Self> {
-        serde_json::from_slice(bytes).map_err(|e| anyhow!("restore failed: {}", e))
+    fn get_export_func_addr(&self, name: &str) -> Result<usize> {
+        let module = self
+            .module_instances
+            .first()
+            .ok_or_else(|| anyhow!("No module instance"))?;
+
+        for export in &module.exports {
+            if export.name == name {
+                if let ExternalValue::Function { addr } = export.value {
+                    return Ok(addr);
+                }
+                bail!("Export '{}' is not a function", name);
+            }
+        }
+
+        bail!("Export '{}' not found", name)
     }
 
-    pub fn invoke(&mut self, function_addr: usize, args: Vec<Value>) -> Result<ExecutionState> {
+    fn invoke_by_addr(&mut self, function_addr: usize, args: Vec<Value>) -> Result<ExecutionState> {
+        if self.pending_arity.is_some() {
+            bail!("cannot invoke while execution is paused; call resume() first");
+        }
+
         let function_instance = self.store.functions.get(function_addr).ok_or_else(|| {
             anyhow!(
                 "Function address: {} does not exist in store.",

@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::PathBuf;
-use gabagool::{ExecutionState, Interpreter, Store, Value, ValueType};
+use gabagool::{Interpreter, Value, ValueType};
 
 fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
@@ -17,11 +17,9 @@ fn main() -> Result<()> {
     let wasm_file = PathBuf::from(&wasm_file);
     let wasm_bytes = fs::read(&wasm_file)?;
 
-    let store = Store::new();
-    let mut interpreter = Interpreter::instantiate(store, &wasm_bytes, vec![])?;
+    let mut interpreter = Interpreter::new(&wasm_bytes)?;
 
-    let func_addr = interpreter.get_export_func_addr(&func_name)?;
-    let param_types = interpreter.get_func_param_types(func_addr)?;
+    let param_types = interpreter.get_param_types(&func_name)?;
 
     let values = param_types
         .iter()
@@ -29,10 +27,8 @@ fn main() -> Result<()> {
         .map(|(vt, arg)| parse_value(vt, arg))
         .collect::<Result<Vec<_>>>()?;
 
-    match interpreter.invoke_export(&func_name, values)? {
-        ExecutionState::Completed(results) => println!("{:?}", results),
-        ExecutionState::FuelExhausted => println!("Execution paused: fuel exhausted"),
-    }
+    let results = interpreter.invoke(&func_name, values)?.into_completed()?;
+    println!("{:?}", results);
 
     Ok(())
 }
