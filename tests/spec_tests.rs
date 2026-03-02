@@ -1,7 +1,7 @@
 use gabagool::{
-    AddrType, CompositeType, ExternalValue, FunctionInstance, FunctionType, GlobalInstance,
-    GlobalType, ImportDescription, Interpreter, Limit, MemoryInstance, MemoryType, Parser, Ref,
-    Store, Value, ValueType,
+    AddrType, CompositeType, ExecutionState, ExternalValue, FunctionInstance, FunctionType,
+    GlobalInstance, GlobalType, ImportDescription, Interpreter, Limit, MemoryInstance, MemoryType,
+    Parser, Ref, Store, Value, ValueType,
 };
 
 #[derive(Debug)]
@@ -19,7 +19,7 @@ enum ExpectedValue {
     F64(NanPat<u64>),
 }
 
-fn setup_spectest_imports<'a>(store: &mut Store<'a>, wasm_bytes: &'a [u8]) -> Vec<ExternalValue> {
+fn setup_spectest_imports(store: &mut Store, wasm_bytes: &[u8]) -> Vec<ExternalValue> {
     let module = Parser::new(wasm_bytes).parse_module().unwrap();
     module
         .import_declarations
@@ -99,13 +99,19 @@ fn spec_step_assert_return(
     failures: &mut Vec<String>,
 ) {
     match interp.invoke_export(name, args.to_vec()) {
-        Ok(actual) => {
+        Ok(ExecutionState::Completed(actual)) => {
             if !values_match(expected, &actual) {
                 failures.push(format!(
                     "step {} assert_return(\"{}\", {:?}): expected {:?}, got {:?}",
                     step, name, args, expected, actual
                 ));
             }
+        }
+        Ok(ExecutionState::FuelExhausted) => {
+            failures.push(format!(
+                "step {} assert_return(\"{}\", {:?}): unexpected fuel exhaustion",
+                step, name, args
+            ));
         }
         Err(e) => {
             failures.push(format!(
@@ -124,10 +130,10 @@ fn spec_step_assert_trap(
     failures: &mut Vec<String>,
 ) {
     match interp.invoke_export(name, args.to_vec()) {
-        Ok(result) => {
+        Ok(state) => {
             failures.push(format!(
                 "step {} assert_trap(\"{}\", {:?}): expected trap, got {:?}",
-                step, name, args, result
+                step, name, args, state
             ));
         }
         Err(_) => {}

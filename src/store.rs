@@ -10,18 +10,20 @@ use crate::execution_grammar::{
     Value,
 };
 
-#[derive(Debug, Default)]
-pub struct Store<'a> {
-    pub functions: Vec<FunctionInstance<'a>>,
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct Store {
+    pub functions: Vec<FunctionInstance>,
     pub tables: Vec<TableInstance>,
     pub memories: Vec<MemoryInstance>,
     pub globals: Vec<GlobalInstance>,
     pub tags: Vec<TagInstance>,
     pub element_segments: Vec<ElementInstance>,
-    pub data_segments: Vec<DataInstance<'a>>,
+    pub data_segments: Vec<DataInstance>,
 }
 
-impl<'a> Store<'a> {
+impl Store {
     pub const fn new() -> Self {
         Self {
             functions: vec![],
@@ -35,7 +37,7 @@ impl<'a> Store<'a> {
     }
 
     fn extract_function_type(
-        module_instance: &ModuleInstance<'a>,
+        module_instance: &ModuleInstance,
         type_index: u32,
     ) -> Result<FunctionType> {
         let sub_type = module_instance
@@ -61,7 +63,7 @@ impl<'a> Store<'a> {
     fn allocate_function(
         &mut self,
         f: Function,
-        module_instance: &ModuleInstance<'a>,
+        module_instance: &ModuleInstance,
     ) -> Result<usize> {
         let f_address = self.functions.len();
 
@@ -80,7 +82,7 @@ impl<'a> Store<'a> {
         &mut self,
         h_f: Box<dyn Fn()>,
         f_idx: u32,
-        module_instance: &ModuleInstance<'a>,
+        module_instance: &ModuleInstance,
     ) -> Result<usize> {
         let func_address = self.functions.len();
 
@@ -146,7 +148,7 @@ impl<'a> Store<'a> {
         element_segment_address
     }
 
-    fn allocate_data_instance(&mut self, data_segment: DataSegment<'a>) -> usize {
+    fn allocate_data_instance(&mut self, data_segment: DataSegment) -> usize {
         let data_address = self.data_segments.len();
 
         self.data_segments.push(DataInstance {
@@ -165,12 +167,12 @@ impl<'a> Store<'a> {
 
     pub fn allocate_module(
         &mut self,
-        module: Module<'a>,
-        mut extern_addrs: Vec<ExternalValue>,
+        module: Module,
+        extern_addrs: Vec<ExternalValue>,
         initial_global_values: Vec<Value>,
         initial_table_refs: Vec<Ref>,
         element_segment_refs: Vec<Vec<Ref>>,
-    ) -> Result<ModuleInstance<'a>> {
+    ) -> Result<ModuleInstance> {
         // step 1
         let mut module_instance = ModuleInstance::new(module.types);
 

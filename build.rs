@@ -145,7 +145,7 @@ mod spec_tests {
                         "    let wasm_bytes: &[u8] = include_bytes!(concat!(env!(\"OUT_DIR\"), \"/wasm/{file}_{midx}.wasm\"));\n",
                         "    let mut store = Store::new();\n",
                         "    let imports = setup_spectest_imports(&mut store, wasm_bytes);\n",
-                        "    let mut interp = Interpreter::instantiate(&mut store, wasm_bytes, imports).unwrap();\n",
+                        "    let mut interp = Interpreter::instantiate(store, wasm_bytes, imports).unwrap();\n",
                         "    let mut failures: Vec<String> = Vec::new();\n",
                         "{steps}\n",
                         "    if !failures.is_empty() {{\n",

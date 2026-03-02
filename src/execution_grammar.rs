@@ -1,20 +1,21 @@
 use std::fmt::{Debug, Formatter};
 
 use anyhow::{anyhow, bail, ensure, Result};
+use serde::{Serialize, Deserialize};
 
 use crate::binary_grammar::{
     Function, FunctionType, GlobalType, ImportDescription, MemoryType, RefType,
     SubType, TableType, ValueType,
 };
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Ref {
     Null,
     FunctionAddr(usize),
     RefExtern(usize),
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Value {
     I32(i32),
     I64(i64),
@@ -72,8 +73,8 @@ pub enum ResultKind {
 }
 
 // todo: is there a better way to store ModuleInstances than cloning?
-#[derive(Debug, Clone)]
-pub struct ModuleInstance<'a> {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModuleInstance {
     pub types: Vec<SubType>,
     pub function_addrs: Vec<usize>,
     pub table_addrs: Vec<usize>,
@@ -82,10 +83,10 @@ pub struct ModuleInstance<'a> {
     pub tag_addrs: Vec<usize>,
     pub elem_addrs: Vec<usize>,
     pub data_addrs: Vec<usize>,
-    pub exports: Vec<ExportInstance<'a>>,
+    pub exports: Vec<ExportInstance>,
 }
 
-impl<'a> ModuleInstance<'a> {
+impl ModuleInstance {
     pub const fn new(types: Vec<SubType>) -> Self {
         Self {
             types,
@@ -101,16 +102,16 @@ impl<'a> ModuleInstance<'a> {
     }
 }
 
-impl<'a> Default for ModuleInstance<'a> {
+impl Default for ModuleInstance {
     fn default() -> Self {
         Self::new(vec![])
     }
 }
 
-pub enum FunctionInstance<'a> {
+pub enum FunctionInstance {
     Local {
         function_type: FunctionType,
-        module: Box<ModuleInstance<'a>>,
+        module: Box<ModuleInstance>,
         code: Function,
     },
     Host {
@@ -119,7 +120,7 @@ pub enum FunctionInstance<'a> {
     },
 }
 
-impl<'a> Debug for FunctionInstance<'a> {
+impl Debug for FunctionInstance {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Local {
@@ -140,38 +141,85 @@ impl<'a> Debug for FunctionInstance<'a> {
     }
 }
 
-#[derive(Debug)]
+impl Serialize for FunctionInstance {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStructVariant;
+        match self {
+            Self::Local {
+                function_type,
+                module,
+                code,
+            } => {
+                let mut sv = serializer.serialize_struct_variant("FunctionInstance", 0, "Local", 3)?;
+                sv.serialize_field("function_type", function_type)?;
+                sv.serialize_field("module", module)?;
+                sv.serialize_field("code", code)?;
+                sv.end()
+            }
+            Self::Host { .. } => {
+                Err(serde::ser::Error::custom("cannot serialize Host function instance"))
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for FunctionInstance {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        enum FunctionInstanceData {
+            Local {
+                function_type: FunctionType,
+                module: Box<ModuleInstance>,
+                code: Function,
+            },
+        }
+        let data = FunctionInstanceData::deserialize(deserializer)?;
+        match data {
+            FunctionInstanceData::Local {
+                function_type,
+                module,
+                code,
+            } => Ok(Self::Local {
+                function_type,
+                module,
+                code,
+            }),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct TableInstance {
     pub table_type: TableType,
     pub elem: Vec<Ref>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct MemoryInstance {
     pub memory_type: MemoryType,
     pub data: Vec<u8>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct GlobalInstance {
     pub global_type: GlobalType,
     pub value: Value,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ElementInstance {
     pub ref_type: RefType,
     pub elem: Vec<Ref>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct TagInstance {
     pub tag_type: FunctionType,
 }
 
-#[derive(Debug)]
-pub struct DataInstance<'a> {
-    pub data: &'a [u8],
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DataInstance {
+    pub data: Vec<u8>,
 }
 
 pub enum ImportValue {
@@ -195,13 +243,13 @@ impl Debug for ImportValue {
 }
 
 #[derive(Debug)]
-pub struct ExternalImport<'a> {
-    pub module: &'a str,
-    pub name: &'a str,
+pub struct ExternalImport {
+    pub module: String,
+    pub name: String,
     pub value: ImportValue,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ExternalValue {
     Function { addr: usize },
     Table { addr: usize },
@@ -210,62 +258,62 @@ pub enum ExternalValue {
     Tag { addr: usize },
 }
 
-#[derive(Debug, Clone)]
-pub struct ExportInstance<'a> {
-    pub name: &'a str,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportInstance {
+    pub name: String,
     pub value: ExternalValue,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Label {
     pub arity: u32,
 }
 
-#[derive(Debug, Default, Clone)]
-pub struct Frame<'a> {
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct Frame {
     pub arity: usize,
     pub locals: Vec<Value>,
-    pub module: ModuleInstance<'a>,
+    pub module: ModuleInstance,
 }
 
-#[derive(Debug)]
-pub enum Entry<'a> {
+#[derive(Debug, Serialize, Deserialize)]
+pub enum Entry {
     Value(Value),
     Label(Label),
-    Activation(Frame<'a>),
+    Activation(Frame),
 }
 
-impl<'a> From<Label> for Entry<'a> {
+impl From<Label> for Entry {
     fn from(value: Label) -> Self {
         Self::Label(value)
     }
 }
 
-impl<'a> From<Frame<'a>> for Entry<'a> {
-    fn from(value: Frame<'a>) -> Self {
+impl From<Frame> for Entry {
+    fn from(value: Frame) -> Self {
         Self::Activation(value)
     }
 }
 
-impl<'a, V: Into<Value>> From<V> for Entry<'a> {
+impl<V: Into<Value>> From<V> for Entry {
     fn from(value: V) -> Self {
         Self::Value(value.into())
     }
 }
 
-#[derive(Debug, Default)]
-pub struct Stack<'a>(Vec<Entry<'a>>);
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct Stack(Vec<Entry>);
 
-impl<'a> Stack<'a> {
-    pub fn push<E: Into<Entry<'a>>>(&mut self, entry: E) {
+impl Stack {
+    pub fn push<E: Into<Entry>>(&mut self, entry: E) {
         self.0.push(entry.into());
     }
 
-    pub fn extend<E: Into<Entry<'a>>, I: IntoIterator<Item = E>>(&mut self, iter: I) {
+    pub fn extend<E: Into<Entry>, I: IntoIterator<Item = E>>(&mut self, iter: I) {
         self.0.extend(iter.into_iter().map(Into::into));
     }
 
-    pub fn pop(&mut self) -> Result<Entry<'a>> {
+    pub fn pop(&mut self) -> Result<Entry> {
         self.0.pop().ok_or_else(|| anyhow!("oob"))
     }
 
@@ -276,7 +324,7 @@ impl<'a> Stack<'a> {
         }
     }
 
-    pub fn pop_n(&mut self, len: usize) -> Result<Vec<Entry<'a>>> {
+    pub fn pop_n(&mut self, len: usize) -> Result<Vec<Entry>> {
         ensure!(
             self.len() >= len,
             "stack must have at least {} entries",
@@ -285,7 +333,7 @@ impl<'a> Stack<'a> {
         Ok(self.0.split_off(self.len() - len))
     }
 
-    pub fn pop_array<const N: usize>(&mut self) -> Result<[Entry<'a>; N]> {
+    pub fn pop_array<const N: usize>(&mut self) -> Result<[Entry; N]> {
         let out = self.pop_n(N)?;
 
         Ok(out.try_into().unwrap())

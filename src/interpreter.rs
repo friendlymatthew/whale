@@ -1,4 +1,5 @@
 use anyhow::{anyhow, bail, ensure, Result};
+use serde::{Serialize, Deserialize};
 use std::mem;
 use std::ops::Neg;
 
@@ -12,14 +13,25 @@ use crate::execution_grammar::{
 use crate::Parser;
 use crate::Store;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ExecutionState {
+    Completed(Vec<Value>),
+    FuelExhausted,
+}
+
+enum RunOutcome {
+    Completed,
+    FuelExhausted,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 enum ControlBlockKind {
     Block,
     Loop(Vec<Instruction>),
     IfElse,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 struct ControlFrame {
     kind: ControlBlockKind,
     block_type: BlockType,
@@ -27,27 +39,29 @@ struct ControlFrame {
     saved_pc: usize,
 }
 
-#[derive(Debug)]
-struct CallFrame<'a> {
+#[derive(Debug, Serialize, Deserialize)]
+struct CallFrame {
     instructions: Vec<Instruction>,
     pc: usize,
     control_stack: Vec<ControlFrame>,
-    frame: Frame<'a>,
+    frame: Frame,
 }
 
-#[derive(Debug)]
-pub struct Interpreter<'s, 'a> {
-    module_instances: Vec<ModuleInstance<'a>>,
-    stack: Stack<'a>,
-    store: &'s mut Store<'a>,
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Interpreter {
+    module_instances: Vec<ModuleInstance>,
+    stack: Stack,
+    store: Store,
     globals: Vec<Value>,
-    call_stack: Vec<CallFrame<'a>>,
+    call_stack: Vec<CallFrame>,
+    fuel: Option<u64>,
+    pending_arity: Option<usize>,
 }
 
-impl<'s, 'a> Interpreter<'s, 'a> {
+impl Interpreter {
     pub fn instantiate(
-        store: &'s mut Store<'a>,
-        module_data: &'a [u8],
+        mut store: Store,
+        module_data: &[u8],
         external_addresses: Vec<ExternalValue>,
     ) -> Result<Self> {
         // step 1-3. todo: validate is a pita
@@ -145,7 +159,7 @@ impl<'s, 'a> Interpreter<'s, 'a> {
         let initial_global_values = module
             .globals
             .iter()
-            .map(|g| eval_const_expr(&g.initial_expression, store))
+            .map(|g| eval_const_expr(&g.initial_expression, &store))
             .collect::<Result<Vec<_>>>()?;
 
         // step 20
@@ -186,6 +200,8 @@ impl<'s, 'a> Interpreter<'s, 'a> {
             store,
             globals: vec![],
             call_stack: vec![],
+            fuel: None,
+            pending_arity: None,
         })
     }
 
@@ -219,12 +235,65 @@ impl<'s, 'a> Interpreter<'s, 'a> {
         bail!("Export '{}' not found", name)
     }
 
-    pub fn invoke_export(&mut self, name: &str, args: Vec<Value>) -> Result<Vec<Value>> {
+    pub fn invoke_export(&mut self, name: &str, args: Vec<Value>) -> Result<ExecutionState> {
         let addr = self.get_export_func_addr(name)?;
         self.invoke(addr, args)
     }
 
-    pub fn invoke(&mut self, function_addr: usize, args: Vec<Value>) -> Result<Vec<Value>> {
+    pub fn resume(&mut self) -> Result<ExecutionState> {
+        let arity = self
+            .pending_arity
+            .ok_or_else(|| anyhow!("no pending execution to resume"))?;
+
+        match self.run() {
+            Ok(RunOutcome::Completed) => {
+                let results = self
+                    .stack
+                    .pop_n(arity)?
+                    .into_iter()
+                    .map(|entry| match entry {
+                        Entry::Value(v) => Ok(v),
+                        _ => Err(anyhow!("Expected value on stack")),
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                self.pending_arity = None;
+                Ok(ExecutionState::Completed(results))
+            }
+            Ok(RunOutcome::FuelExhausted) => Ok(ExecutionState::FuelExhausted),
+            Err(e) => {
+                self.stack.clear();
+                self.call_stack.clear();
+                self.pending_arity = None;
+                Err(e)
+            }
+        }
+    }
+
+    pub fn set_fuel(&mut self, fuel: u64) {
+        self.fuel = Some(fuel);
+    }
+
+    pub fn fuel(&self) -> Option<u64> {
+        self.fuel
+    }
+
+    pub fn store(&self) -> &Store {
+        &self.store
+    }
+
+    pub fn store_mut(&mut self) -> &mut Store {
+        &mut self.store
+    }
+
+    pub fn snapshot(&self) -> Result<Vec<u8>> {
+        serde_json::to_vec(self).map_err(|e| anyhow!("snapshot failed: {}", e))
+    }
+
+    pub fn from_snapshot(bytes: &[u8]) -> Result<Self> {
+        serde_json::from_slice(bytes).map_err(|e| anyhow!("restore failed: {}", e))
+    }
+
+    pub fn invoke(&mut self, function_addr: usize, args: Vec<Value>) -> Result<ExecutionState> {
         let function_instance = self.store.functions.get(function_addr).ok_or_else(|| {
             anyhow!(
                 "Function address: {} does not exist in store.",
@@ -259,23 +328,31 @@ impl<'s, 'a> Interpreter<'s, 'a> {
         self.stack.extend(args.into_iter().map(Entry::Value));
 
         self.push_function_call(function_addr)?;
-        if let Err(e) = self.run() {
-            self.stack.clear();
-            self.call_stack.clear();
-            return Err(e);
+        match self.run() {
+            Ok(RunOutcome::Completed) => {
+                let results = self
+                    .stack
+                    .pop_n(num_results)?
+                    .into_iter()
+                    .map(|entry| match entry {
+                        Entry::Value(v) => Ok(v),
+                        _ => Err(anyhow!("Expected value on stack")),
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                self.pending_arity = None;
+                Ok(ExecutionState::Completed(results))
+            }
+            Ok(RunOutcome::FuelExhausted) => {
+                self.pending_arity = Some(num_results);
+                Ok(ExecutionState::FuelExhausted)
+            }
+            Err(e) => {
+                self.stack.clear();
+                self.call_stack.clear();
+                self.pending_arity = None;
+                Err(e)
+            }
         }
-
-        let results = self
-            .stack
-            .pop_n(num_results)?
-            .into_iter()
-            .map(|entry| match entry {
-                Entry::Value(v) => Ok(v),
-                _ => Err(anyhow!("Expected value on stack")),
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        Ok(results)
     }
 
     fn handle_branch(&mut self, l: u32, depth: usize) -> Result<()> {
@@ -314,10 +391,10 @@ impl<'s, 'a> Interpreter<'s, 'a> {
         Ok(())
     }
 
-    fn run(&mut self) -> Result<()> {
+    fn run(&mut self) -> Result<RunOutcome> {
         loop {
             let depth = match self.call_stack.len() {
-                0 => return Ok(()),
+                0 => return Ok(RunOutcome::Completed),
                 n => n - 1,
             };
 
@@ -356,6 +433,14 @@ impl<'s, 'a> Interpreter<'s, 'a> {
             let instruction =
                 self.call_stack[depth].instructions[self.call_stack[depth].pc].clone();
             self.call_stack[depth].pc += 1;
+
+            if let Some(ref mut fuel) = self.fuel {
+                if *fuel == 0 {
+                    self.call_stack[depth].pc -= 1; // undo so resume re-executes this instruction
+                    return Ok(RunOutcome::FuelExhausted);
+                }
+                *fuel -= 1;
+            }
 
             match instruction {
                 Instruction::Unreachable => bail!("unreachable executed"),

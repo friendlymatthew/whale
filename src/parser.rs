@@ -31,7 +31,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parses a .wasm file in its entirety.
-    pub fn parse_module(&mut self) -> Result<Module<'a>> {
+    pub fn parse_module(&mut self) -> Result<Module> {
         let mut module = Module::new(self.parse_preamble()?);
         let mut data_count: Option<u32> = None;
 
@@ -184,11 +184,11 @@ impl<'a> Parser<'a> {
     }
 
     // 5.2: Values
-    fn parse_name(&mut self) -> Result<&'a str> {
+    fn parse_name(&mut self) -> Result<String> {
         let n = self.read_u32()?;
         let slice = self.read_slice(n as usize)?;
 
-        Ok(std::str::from_utf8(slice)?)
+        Ok(std::str::from_utf8(slice)?.to_owned())
     }
 
     // 5.3: Types
@@ -1209,13 +1209,13 @@ impl<'a> Parser<'a> {
 
     // 5.5: Modules
 
-    fn parse_custom_section(&mut self, size: u32) -> Result<CustomSection<'a>> {
+    fn parse_custom_section(&mut self, size: u32) -> Result<CustomSection> {
         let current_pos = self.cursor;
 
         let name = self.parse_name()?;
         let slice_len = size as usize - (self.cursor - current_pos);
 
-        let bytes = self.read_slice(slice_len)?;
+        let bytes = self.read_slice(slice_len)?.to_vec();
 
         Ok(CustomSection { name, bytes })
     }
@@ -1227,7 +1227,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_import(&mut self) -> Result<ImportDeclaration<'a>> {
+    fn parse_import(&mut self) -> Result<ImportDeclaration> {
         Ok(ImportDeclaration {
             module: self.parse_name()?,
             name: self.parse_name()?,
@@ -1249,7 +1249,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_import_section(&mut self) -> Result<ImportSection<'a>> {
+    fn parse_import_section(&mut self) -> Result<ImportSection> {
         let imports = self.parse_vec(Self::parse_import)?;
 
         Ok(ImportSection {
@@ -1326,7 +1326,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_export(&mut self) -> Result<Export<'a>> {
+    fn parse_export(&mut self) -> Result<Export> {
         Ok(Export {
             name: self.parse_name()?,
             description: match self.read_u8()? {
@@ -1343,7 +1343,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_export_section(&mut self) -> Result<ExportSection<'a>> {
+    fn parse_export_section(&mut self) -> Result<ExportSection> {
         Ok(ExportSection {
             exports: self.parse_vec(Self::parse_export)?,
         })
@@ -1510,13 +1510,13 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_data_segment(&mut self) -> Result<DataSegment<'a>> {
+    fn parse_data_segment(&mut self) -> Result<DataSegment> {
         let segment = match self.read_u32()? {
             0 => {
                 let offset = self.parse_expression()?;
 
                 let len = self.read_u32()? as usize;
-                let bytes = self.read_slice(len)?;
+                let bytes = self.read_slice(len)?.to_vec();
 
                 DataSegment {
                     bytes,
@@ -1526,7 +1526,7 @@ impl<'a> Parser<'a> {
             1 => DataSegment {
                 bytes: {
                     let len = self.read_u32()? as usize;
-                    self.read_slice(len)?
+                    self.read_slice(len)?.to_vec()
                 },
                 mode: DataMode::Passive,
             },
@@ -1534,7 +1534,7 @@ impl<'a> Parser<'a> {
                 let memory = self.read_u32()?;
                 let offset = self.parse_expression()?;
                 let len = self.read_u32()? as usize;
-                let bytes = self.read_slice(len)?;
+                let bytes = self.read_slice(len)?.to_vec();
 
                 DataSegment {
                     bytes,
@@ -1547,13 +1547,13 @@ impl<'a> Parser<'a> {
         Ok(segment)
     }
 
-    fn parse_data_section(&mut self) -> Result<DataSection<'a>> {
+    fn parse_data_section(&mut self) -> Result<DataSection> {
         Ok(DataSection {
             data_segments: self.parse_vec(Self::parse_data_segment)?,
         })
     }
 
-    fn parse_section(&mut self, id: u8) -> Result<Section<'a>> {
+    fn parse_section(&mut self, id: u8) -> Result<Section> {
         use crate::binary_grammar::section_id::*;
 
         let size = self.read_u32()?;
