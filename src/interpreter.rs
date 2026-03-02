@@ -10,8 +10,8 @@ use crate::binary_grammar::{
 use crate::execution_grammar::{
     Entry, ExternalValue, Frame, FunctionInstance, Label, ModuleInstance, Ref, Stack, Value,
 };
-use crate::Parser;
-use crate::Store;
+use crate::{AddrType, Store};
+use crate::{Parser, PAGE_SIZE};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ExecutionState {
@@ -113,7 +113,7 @@ impl Interpreter {
         );
 
         // step 6
-        let _data_instructions = module
+        let data_instructions = module
             .data_segments
             .iter()
             .enumerate()
@@ -200,14 +200,14 @@ impl Interpreter {
         }));
 
         // step 27 - todo: execute _element_instructions
-        // step 28 - todo: execute _data_instructions
+
+        // step 28 - execute data segment initialization
         // step 29 - todo: if module has start function, call it
 
         // step 30
         stack.pop()?;
 
-        // step 31
-        Ok(Self {
+        let mut interpreter = Self {
             module_instances: vec![module_instance],
             stack,
             store,
@@ -215,7 +215,25 @@ impl Interpreter {
             call_stack: vec![],
             fuel: None,
             pending_arity: None,
-        })
+        };
+
+        if !data_instructions.is_empty() {
+            let frame = Frame {
+                module: interpreter.module_instances[0].clone(),
+                ..Default::default()
+            };
+            interpreter.stack.push(Entry::Activation(frame.clone()));
+            interpreter.call_stack.push(CallFrame {
+                instructions: data_instructions,
+                pc: 0,
+                control_stack: vec![],
+                frame,
+            });
+            interpreter.run()?;
+        }
+
+        // step 31
+        Ok(interpreter)
     }
 
     pub fn snapshot(&self) -> Result<Vec<u8>> {
@@ -636,35 +654,262 @@ impl Interpreter {
                 Instruction::TableGrow(_) => todo!(),
                 Instruction::TableSize(_) => todo!(),
                 Instruction::TableFill(_) => todo!(),
-                Instruction::I32Load(_) => todo!(),
-                Instruction::I64Load(_) => todo!(),
-                Instruction::F32Load(_) => todo!(),
-                Instruction::F64Load(_) => todo!(),
-                Instruction::I32Load8Signed(_) => todo!(),
-                Instruction::I32Load8Unsigned(_) => todo!(),
-                Instruction::I32Load16Signed(_) => todo!(),
-                Instruction::I32Load16Unsigned(_) => todo!(),
-                Instruction::I64Load8Signed(_) => todo!(),
-                Instruction::I64Load8Unsigned(_) => todo!(),
-                Instruction::I64Load16Signed(_) => todo!(),
-                Instruction::I64Load16Unsigned(_) => todo!(),
-                Instruction::I64Load32Signed(_) => todo!(),
-                Instruction::I64Load32Unsigned(_) => todo!(),
-                Instruction::I32Store(_) => todo!(),
-                Instruction::I64Store(_) => todo!(),
-                Instruction::F32Store(_) => todo!(),
-                Instruction::F64Store(_) => todo!(),
-                Instruction::I32Store8(_) => todo!(),
-                Instruction::I32Store16(_) => todo!(),
-                Instruction::I64Store8(_) => todo!(),
-                Instruction::I64Store16(_) => todo!(),
-                Instruction::I64Store32(_) => todo!(),
-                Instruction::MemorySize(_) => todo!(),
-                Instruction::MemoryGrow(_) => todo!(),
-                Instruction::MemoryInit(_, _) => todo!(),
-                Instruction::DataDrop(_) => todo!(),
-                Instruction::MemoryCopy(_, _) => todo!(),
-                Instruction::MemoryFill(_) => todo!(),
+                Instruction::I32Load(ma) => {
+                    mem_load!(self, depth, ma, 4, |b| i32::from_le_bytes(b))
+                }
+                Instruction::I64Load(ma) => {
+                    mem_load!(self, depth, ma, 8, |b| i64::from_le_bytes(b))
+                }
+                Instruction::F32Load(ma) => {
+                    mem_load!(self, depth, ma, 4, |b| f32::from_le_bytes(b))
+                }
+                Instruction::F64Load(ma) => {
+                    mem_load!(self, depth, ma, 8, |b| f64::from_le_bytes(b))
+                }
+                Instruction::I32Load8Signed(ma) => {
+                    mem_load!(self, depth, ma, 1, |b| b[0] as i8 as i32)
+                }
+                Instruction::I32Load8Unsigned(ma) => {
+                    mem_load!(self, depth, ma, 1, |b| b[0] as u8 as i32)
+                }
+                Instruction::I32Load16Signed(ma) => {
+                    mem_load!(self, depth, ma, 2, |b| i16::from_le_bytes(b) as i32)
+                }
+                Instruction::I32Load16Unsigned(ma) => {
+                    mem_load!(self, depth, ma, 2, |b| u16::from_le_bytes(b) as i32)
+                }
+                Instruction::I64Load8Signed(ma) => {
+                    mem_load!(self, depth, ma, 1, |b| b[0] as i8 as i64)
+                }
+                Instruction::I64Load8Unsigned(ma) => {
+                    mem_load!(self, depth, ma, 1, |b| b[0] as u8 as i64)
+                }
+                Instruction::I64Load16Signed(ma) => {
+                    mem_load!(self, depth, ma, 2, |b| i16::from_le_bytes(b) as i64)
+                }
+                Instruction::I64Load16Unsigned(ma) => {
+                    mem_load!(self, depth, ma, 2, |b| u16::from_le_bytes(b) as i64)
+                }
+                Instruction::I64Load32Signed(ma) => {
+                    mem_load!(self, depth, ma, 4, |b| i32::from_le_bytes(b) as i64)
+                }
+                Instruction::I64Load32Unsigned(ma) => {
+                    mem_load!(self, depth, ma, 4, |b| u32::from_le_bytes(b) as i64)
+                }
+                Instruction::I32Store(ma) => mem_store!(self, depth, ma, 4, |v| {
+                    let Value::I32(c) = v else {
+                        bail!("expected i32")
+                    };
+                    c.to_le_bytes()
+                }),
+                Instruction::I64Store(ma) => mem_store!(self, depth, ma, 8, |v| {
+                    let Value::I64(c) = v else {
+                        bail!("expected i64")
+                    };
+                    c.to_le_bytes()
+                }),
+                Instruction::F32Store(ma) => mem_store!(self, depth, ma, 4, |v| {
+                    let Value::F32(c) = v else {
+                        bail!("expected f32")
+                    };
+                    c.to_le_bytes()
+                }),
+                Instruction::F64Store(ma) => mem_store!(self, depth, ma, 8, |v| {
+                    let Value::F64(c) = v else {
+                        bail!("expected f64")
+                    };
+                    c.to_le_bytes()
+                }),
+                Instruction::I32Store8(ma) => mem_store!(self, depth, ma, 1, |v| {
+                    let Value::I32(c) = v else {
+                        bail!("expected i32")
+                    };
+                    (c as u8).to_le_bytes()
+                }),
+                Instruction::I32Store16(ma) => mem_store!(self, depth, ma, 2, |v| {
+                    let Value::I32(c) = v else {
+                        bail!("expected i32")
+                    };
+                    (c as u16).to_le_bytes()
+                }),
+                Instruction::I64Store8(ma) => mem_store!(self, depth, ma, 1, |v| {
+                    let Value::I64(c) = v else {
+                        bail!("expected i64")
+                    };
+                    (c as u8).to_le_bytes()
+                }),
+                Instruction::I64Store16(ma) => mem_store!(self, depth, ma, 2, |v| {
+                    let Value::I64(c) = v else {
+                        bail!("expected i64")
+                    };
+                    (c as u16).to_le_bytes()
+                }),
+                Instruction::I64Store32(ma) => mem_store!(self, depth, ma, 4, |v| {
+                    let Value::I64(c) = v else {
+                        bail!("expected i64")
+                    };
+                    (c as u32).to_le_bytes()
+                }),
+                Instruction::MemorySize(i) => {
+                    let frame_module = &self.call_stack[depth].frame.module;
+                    let mem_addr = frame_module.mem_addrs[i as usize];
+                    let mem_instance = &self.store.memories[mem_addr];
+
+                    let size = mem_instance.data.len() / PAGE_SIZE;
+
+                    match mem_instance.memory_type.addr_type {
+                        AddrType::I32 => self.stack.push(size as i32),
+                        AddrType::I64 => self.stack.push(size as i64),
+                    }
+                }
+                Instruction::MemoryGrow(i) => {
+                    let frame_module = &self.call_stack[depth].frame.module;
+                    let mem_addr = frame_module.mem_addrs[i as usize];
+                    let mem_instance = &mut self.store.memories[mem_addr];
+
+                    let page_count_to_grow =
+                        match (mem_instance.memory_type.addr_type, self.stack.pop_value()?) {
+                            (AddrType::I32, Value::I32(n)) => n as usize,
+                            (AddrType::I64, Value::I64(n)) => n as usize,
+                            (addr_type, foreign) => {
+                                bail!("expected {addr_type:?} value, got: {foreign:?}")
+                            }
+                        };
+
+                    let old_size = mem_instance.data.len() / PAGE_SIZE;
+                    let new_size = old_size + page_count_to_grow;
+
+                    // 4 GiB — max addressable by i32
+                    const MAX_PAGES: usize = 65536;
+                    if new_size > MAX_PAGES || new_size as u64 > mem_instance.memory_type.limit.max
+                    {
+                        match mem_instance.memory_type.addr_type {
+                            AddrType::I32 => self.stack.push(-1_i32),
+                            AddrType::I64 => self.stack.push(-1_i64),
+                        }
+
+                        continue;
+                    }
+
+                    mem_instance.data.resize(new_size * PAGE_SIZE, 0);
+                    mem_instance.memory_type.limit.min = new_size as u64;
+
+                    match mem_instance.memory_type.addr_type {
+                        AddrType::I32 => self.stack.push(old_size as i32),
+                        AddrType::I64 => self.stack.push(old_size as i64),
+                    }
+                }
+                Instruction::MemoryInit(data_idx, mem_idx) => {
+                    let frame_module = &self.call_stack[depth].frame.module;
+                    let mem_addr = frame_module.mem_addrs[mem_idx as usize];
+                    let data_addr = frame_module.data_addrs[data_idx as usize];
+                    let addr_type = self.store.memories[mem_addr].memory_type.addr_type;
+
+                    let n = match self.stack.pop_value()? {
+                        Value::I32(v) => v as usize,
+                        v => bail!("expected i32 count, got: {v:?}"),
+                    };
+                    let s = match self.stack.pop_value()? {
+                        Value::I32(v) => v as usize,
+                        v => bail!("expected i32 source offset, got: {v:?}"),
+                    };
+                    let d: usize = match (addr_type, self.stack.pop_value()?) {
+                        (AddrType::I32, Value::I32(v)) => v as usize,
+                        (AddrType::I64, Value::I64(v)) => v as usize,
+                        (at, v) => bail!("expected {at:?} dest offset, got: {v:?}"),
+                    };
+
+                    if s.saturating_add(n) > self.store.data_segments[data_addr].data.len() {
+                        bail!("trap: out of bounds memory access");
+                    }
+                    if d.saturating_add(n) > self.store.memories[mem_addr].data.len() {
+                        bail!("trap: out of bounds memory access");
+                    }
+
+                    if n == 0 {
+                        continue;
+                    }
+
+                    let src = self.store.data_segments[data_addr].data[s..s + n].to_vec();
+                    self.store.memories[mem_addr].data[d..d + n].copy_from_slice(&src);
+                }
+                Instruction::DataDrop(x) => {
+                    let frame_module = &self.call_stack[depth].frame.module;
+                    let data_addr = frame_module.data_addrs[x as usize];
+                    self.store.data_segments[data_addr].data.clear();
+                }
+                Instruction::MemoryCopy(x1, x2) => {
+                    let frame_module = &self.call_stack[depth].frame.module;
+                    let mem_addr1 = frame_module.mem_addrs[x1 as usize];
+                    let mem_addr2 = frame_module.mem_addrs[x2 as usize];
+                    let addr_type = self.store.memories[mem_addr1].memory_type.addr_type;
+
+                    let n: u64 = match (addr_type, self.stack.pop_value()?) {
+                        (AddrType::I32, Value::I32(v)) => v as u64,
+                        (AddrType::I64, Value::I64(v)) => v as u64,
+                        (at, v) => bail!("expected {at:?} value, got: {v:?}"),
+                    };
+                    let i2: u64 = match (addr_type, self.stack.pop_value()?) {
+                        (AddrType::I32, Value::I32(v)) => v as u64,
+                        (AddrType::I64, Value::I64(v)) => v as u64,
+                        (at, v) => bail!("expected {at:?} value, got: {v:?}"),
+                    };
+                    let i1: u64 = match (addr_type, self.stack.pop_value()?) {
+                        (AddrType::I32, Value::I32(v)) => v as u64,
+                        (AddrType::I64, Value::I64(v)) => v as u64,
+                        (at, v) => bail!("expected {at:?} value, got: {v:?}"),
+                    };
+
+                    let (n, i1, i2) = (n as usize, i1 as usize, i2 as usize);
+
+                    if i1.saturating_add(n) > self.store.memories[mem_addr1].data.len() {
+                        bail!("trap: out of bounds memory access");
+                    }
+                    if i2.saturating_add(n) > self.store.memories[mem_addr2].data.len() {
+                        bail!("trap: out of bounds memory access");
+                    }
+
+                    if n == 0 {
+                        continue;
+                    }
+
+                    if mem_addr1 == mem_addr2 {
+                        self.store.memories[mem_addr1]
+                            .data
+                            .copy_within(i2..i2 + n, i1);
+                    } else {
+                        let src = self.store.memories[mem_addr2].data[i2..i2 + n].to_vec();
+                        self.store.memories[mem_addr1].data[i1..i1 + n].copy_from_slice(&src);
+                    }
+                }
+                Instruction::MemoryFill(i) => {
+                    let frame_module = &self.call_stack[depth].frame.module;
+                    let mem_addr = frame_module.mem_addrs[i as usize];
+                    let addr_type = self.store.memories[mem_addr].memory_type.addr_type;
+
+                    let n = match (addr_type, self.stack.pop_value()?) {
+                        (AddrType::I32, Value::I32(v)) => v as u64,
+                        (AddrType::I64, Value::I64(v)) => v as u64,
+                        (at, v) => bail!("expected {at:?} value, got: {v:?}"),
+                    };
+                    let val: i32 = self.stack.pop_value()?.try_into()?;
+                    let i: u64 = match (addr_type, self.stack.pop_value()?) {
+                        (AddrType::I32, Value::I32(v)) => v as u64,
+                        (AddrType::I64, Value::I64(v)) => v as u64,
+                        (at, v) => bail!("expected {at:?} value, got: {v:?}"),
+                    };
+
+                    let (n, i) = (n as usize, i as usize);
+                    let mem = &mut self.store.memories[mem_addr];
+
+                    if i.saturating_add(n) > mem.data.len() {
+                        bail!("trap: out of bounds memory access");
+                    }
+
+                    if n > 0 {
+                        mem.data[i..i + n].fill(val as u8);
+                    }
+                }
                 Instruction::I32Const(v) => {
                     self.stack.push(v);
                 }
@@ -1634,7 +1879,7 @@ fn run_data(index: u32, data_segment: &DataSegment) -> Vec<Instruction> {
             instrs.extend([
                 Instruction::I32Const(0),
                 Instruction::I32Const(n as i32),
-                Instruction::MemoryInit(*memory, index),
+                Instruction::MemoryInit(index, *memory),
                 Instruction::DataDrop(index),
             ]);
 

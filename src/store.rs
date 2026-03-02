@@ -1,16 +1,17 @@
-use anyhow::{anyhow, bail, ensure, Result};
+use anyhow::{anyhow, bail, Result};
 
 use crate::binary_grammar::{
     CompositeType, DataSegment, ElementSegment, ExportDescription, Function, FunctionType, Global,
-    ImportDeclaration, ImportDescription, MemoryType, Module, TableDef, TableType, Tag,
+    MemoryType, Module, TableType,
 };
 use crate::execution_grammar::{
-    DataInstance, ElementInstance, ExportInstance, ExternalImport, ExternalValue, FunctionInstance,
-    GlobalInstance, ImportValue, MemoryInstance, ModuleInstance, Ref, TableInstance, TagInstance,
-    Value,
+    DataInstance, ElementInstance, ExportInstance, ExternalValue, FunctionInstance, GlobalInstance,
+    MemoryInstance, ModuleInstance, Ref, TableInstance, TagInstance, Value,
 };
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
+
+pub(crate) const PAGE_SIZE: usize = 65536;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Store {
@@ -53,10 +54,7 @@ impl Store {
 
         match &sub_type.composite_type {
             CompositeType::Func(ft) => Ok(ft.clone()),
-            _ => bail!(
-                "Type index {} is not a function type",
-                type_index
-            ),
+            _ => bail!("Type index {} is not a function type", type_index),
         }
     }
 
@@ -111,7 +109,6 @@ impl Store {
 
     fn allocate_memory(&mut self, memory_type: MemoryType) -> usize {
         let memory_address = self.memories.len();
-        const PAGE_SIZE: usize = 65536;
         let n = memory_type.limit.min as usize * PAGE_SIZE;
 
         self.memories.push(MemoryInstance {

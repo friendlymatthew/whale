@@ -128,6 +128,25 @@ mod spec_tests {
                         ));
                     }
 
+                    WastDirective::Invoke(ref invoke) => {
+                        if module_idx < 0 {
+                            continue;
+                        }
+                        if invoke.module.is_some() {
+                            continue;
+                        }
+
+                        let Some(args_code) = render_args(&invoke.args) else {
+                            continue;
+                        };
+
+                        let steps = &mut modules.last_mut().unwrap().1;
+                        steps.push(format!(
+                            "    spec_step_invoke(&mut interp, \"{}\", &[{}]);",
+                            invoke.name, args_code
+                        ));
+                    }
+
                     _ => {}
                 }
             }

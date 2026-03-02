@@ -16,6 +16,8 @@ pub(crate) mod binary_grammar;
 pub(crate) mod execution_grammar;
 #[macro_use]
 mod numerics;
+#[macro_use]
+mod memory;
 mod interpreter;
 pub mod leb128;
 mod parser;

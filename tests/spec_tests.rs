@@ -134,6 +134,10 @@ fn spec_step_assert_trap(
     }
 }
 
+fn spec_step_invoke(interp: &mut Interpreter, name: &str, args: &[Value]) {
+    let _ = interp.invoke(name, args.to_vec());
+}
+
 fn values_match(expected: &[ExpectedValue], actual: &[Value]) -> bool {
     if expected.len() != actual.len() {
         return false;

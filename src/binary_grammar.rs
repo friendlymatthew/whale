@@ -1,4 +1,4 @@
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 /// The maximum length of a string.
 pub const MAX_STRING_SIZE: usize = 100000;
@@ -95,7 +95,7 @@ pub enum HeapType {
     TypeIndex(u32),
 }
 
-#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AddrType {
     I32,
     I64,
