@@ -66,6 +66,8 @@ mod spec_tests {
 
             let mut module_idx: i32 = -1;
             let mut modules = Vec::new();
+            // Track (register ...) directives: maps registered name -> module index
+            let mut registered: Vec<(String, i32)> = Vec::new();
 
             for directive in wast.directives {
                 match directive {
@@ -77,6 +79,12 @@ mod spec_tests {
                             fs::write(&wasm_path, bytes).unwrap();
                         }
                         modules.push((module_idx, Vec::new()));
+                    }
+
+                    WastDirective::Register { name, .. } => {
+                        if module_idx >= 0 {
+                            registered.push((name.to_string(), module_idx));
+                        }
                     }
 
                     WastDirective::AssertReturn { exec, results, .. } => {
@@ -151,19 +159,87 @@ mod spec_tests {
                 }
             }
 
+            // Build a map: module_idx -> list of registered modules that precede it
+            let mut registered_before: std::collections::BTreeMap<i32, Vec<(String, i32)>> =
+                std::collections::BTreeMap::new();
+            for &(midx, ref _steps) in &modules {
+                let deps: Vec<(String, i32)> = registered
+                    .iter()
+                    .filter(|(_, ridx)| *ridx < midx)
+                    .cloned()
+                    .collect();
+                if !deps.is_empty() {
+                    registered_before.insert(midx, deps);
+                }
+            }
+
             for (midx, steps) in &modules {
                 if steps.is_empty() {
                     continue;
                 }
                 let test_name = format!("{}_{}", safe_name, midx);
                 let steps_code = steps.join("\n");
+
+                // Generate prerequisite setup code for registered modules
+                let deps = registered_before.get(midx);
+                let has_deps = deps.is_some_and(|d| !d.is_empty());
+
+                let setup_code = if has_deps {
+                    let deps = deps.unwrap();
+                    // Collect unique prerequisite module indices (in order)
+                    let mut prereq_indices: Vec<i32> = Vec::new();
+                    for (_, dep_idx) in deps {
+                        if !prereq_indices.contains(dep_idx) {
+                            prereq_indices.push(*dep_idx);
+                        }
+                    }
+                    prereq_indices.sort();
+
+                    let mut setup = String::new();
+                    // Instantiate each prerequisite module
+                    for pidx in &prereq_indices {
+                        setup.push_str(&format!(
+                            concat!(
+                                "    let prereq_wasm_{pidx}: &[u8] = include_bytes!(concat!(env!(\"OUT_DIR\"), \"/wasm/{file}_{pidx}.wasm\"));\n",
+                                "    let prereq_imports_{pidx} = setup_spectest_imports(&mut store, prereq_wasm_{pidx});\n",
+                                "    let prereq_interp_{pidx} = Interpreter::instantiate(store, prereq_wasm_{pidx}, prereq_imports_{pidx}).unwrap();\n",
+                                "    let prereq_exports_{pidx}: Vec<ExportInstance> = prereq_interp_{pidx}.module_exports().to_vec();\n",
+                                "    store = prereq_interp_{pidx}.into_store();\n",
+                            ),
+                            pidx = pidx,
+                            file = safe_name,
+                        ));
+                    }
+
+                    // Build the registered_exports vec
+                    setup.push_str("    let registered_exports: Vec<(&str, &[ExportInstance])> = vec![");
+                    for (name, dep_idx) in deps {
+                        setup.push_str(&format!(
+                            "(\"{}\", &prereq_exports_{}), ",
+                            name, dep_idx
+                        ));
+                    }
+                    setup.push_str("];\n");
+
+                    // Resolve imports using registered modules
+                    setup.push_str(&format!(
+                        concat!(
+                            "    let imports = resolve_imports_with_registered(&mut store, wasm_bytes, &registered_exports);\n",
+                        ),
+                    ));
+                    setup
+                } else {
+                    "    let imports = setup_spectest_imports(&mut store, wasm_bytes);\n"
+                        .to_string()
+                };
+
                 all_tests.push_str(&format!(
                     concat!(
                         "#[test]\n",
                         "fn {test_name}() {{\n",
                         "    let wasm_bytes: &[u8] = include_bytes!(concat!(env!(\"OUT_DIR\"), \"/wasm/{file}_{midx}.wasm\"));\n",
                         "    let mut store = Store::new();\n",
-                        "    let imports = setup_spectest_imports(&mut store, wasm_bytes);\n",
+                        "{setup}",
                         "    let mut interp = Interpreter::instantiate(store, wasm_bytes, imports).unwrap();\n",
                         "    let mut failures: Vec<String> = Vec::new();\n",
                         "{steps}\n",
@@ -175,6 +251,7 @@ mod spec_tests {
                     test_name = test_name,
                     file = safe_name,
                     midx = midx,
+                    setup = setup_code,
                     steps = steps_code,
                 ));
             }

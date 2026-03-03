@@ -1,7 +1,7 @@
 use gabagool::{
-    AddrType, CompositeType, ExternalValue, FunctionInstance, GlobalInstance, GlobalType,
-    ImportDescription, Interpreter, Limit, MemoryInstance, MemoryType, Parser, Ref, Store, Value,
-    ValueType,
+    AddrType, CompositeType, ExportInstance, ExternalValue, FunctionInstance, GlobalInstance,
+    GlobalType, ImportDescription, Interpreter, Limit, MemoryInstance, MemoryType, Parser, Ref,
+    Store, Value, ValueType,
 };
 
 #[derive(Debug)]
@@ -17,6 +17,21 @@ enum ExpectedValue {
     I64(i64),
     F32(NanPat<u32>),
     F64(NanPat<u64>),
+}
+
+/// Create a spectest-style memory: 1 page initial, 2 pages max
+/// (matching the standard WebAssembly spectest module)
+fn create_spectest_memory(store: &mut Store, mt: &MemoryType) -> ExternalValue {
+    let addr = store.memories.len();
+    // spectest module always provides memory with 1 page initial, 2 pages max
+    store.memories.push(MemoryInstance {
+        memory_type: MemoryType {
+            addr_type: mt.addr_type,
+            limit: Limit { min: 1, max: 2 },
+        },
+        data: vec![0u8; 65536],
+    });
+    ExternalValue::Memory { addr }
 }
 
 fn setup_spectest_imports(store: &mut Store, wasm_bytes: &[u8]) -> Vec<ExternalValue> {
@@ -43,21 +58,7 @@ fn setup_spectest_imports(store: &mut Store, wasm_bytes: &[u8]) -> Vec<ExternalV
                 });
                 ExternalValue::Global { addr }
             }
-            ImportDescription::Mem(mt) => {
-                let addr = store.memories.len();
-                let pages = mt.limit.min as usize;
-                store.memories.push(MemoryInstance {
-                    memory_type: MemoryType {
-                        addr_type: mt.addr_type,
-                        limit: Limit {
-                            min: mt.limit.min,
-                            max: mt.limit.max,
-                        },
-                    },
-                    data: vec![0u8; pages * 65536],
-                });
-                ExternalValue::Memory { addr }
-            }
+            ImportDescription::Mem(mt) => create_spectest_memory(store, mt),
             ImportDescription::Table(_) => {
                 let addr = store.tables.len();
                 store.tables.push(gabagool::TableInstance {
@@ -164,6 +165,81 @@ fn values_match(expected: &[ExpectedValue], actual: &[Value]) -> bool {
             },
             _ => false,
         })
+}
+
+fn resolve_imports_with_registered(
+    store: &mut Store,
+    wasm_bytes: &[u8],
+    registered_exports: &[(&str, &[ExportInstance])],
+) -> Vec<ExternalValue> {
+    let module = Parser::new(wasm_bytes).parse_module().unwrap();
+    module
+        .import_declarations
+        .iter()
+        .map(|import| {
+            // Try to find the import in registered modules
+            for &(reg_name, exports) in registered_exports {
+                if import.module == reg_name {
+                    for export in exports {
+                        if export.name == import.name {
+                            return export.value.clone();
+                        }
+                    }
+                }
+            }
+            // Fall back to spectest-style import
+            match &import.description {
+                ImportDescription::Global(gt) => {
+                    let value = match gt.value_type {
+                        ValueType::I32 => Value::I32(666),
+                        ValueType::I64 => Value::I64(666),
+                        ValueType::F32 => Value::F32(666.6),
+                        ValueType::F64 => Value::F64(666.6),
+                        _ => Value::I32(0),
+                    };
+                    let addr = store.globals.len();
+                    store.globals.push(GlobalInstance {
+                        global_type: GlobalType {
+                            value_type: gt.value_type.clone(),
+                            mutability: gt.mutability.clone(),
+                        },
+                        value,
+                    });
+                    ExternalValue::Global { addr }
+                }
+                ImportDescription::Mem(mt) => create_spectest_memory(store, mt),
+                ImportDescription::Table(_) => {
+                    let addr = store.tables.len();
+                    store.tables.push(gabagool::TableInstance {
+                        table_type: gabagool::TableType {
+                            element_reference_type: gabagool::RefType::FuncRef,
+                            addr_type: AddrType::I32,
+                            limit: Limit { min: 10, max: 20 },
+                        },
+                        elem: vec![Ref::Null; 10],
+                    });
+                    ExternalValue::Table { addr }
+                }
+                ImportDescription::Func(type_idx) => {
+                    let addr = store.functions.len();
+                    let function_type =
+                        match &module.types[*type_idx as usize].composite_type {
+                            CompositeType::Func(ft) => ft.clone(),
+                            _ => panic!("expected function type at index {}", type_idx),
+                        };
+                    store.functions.push(FunctionInstance::Host {
+                        function_type,
+                        code: Box::new(|| {}),
+                    });
+                    ExternalValue::Function { addr }
+                }
+                ImportDescription::Tag(_) => {
+                    let addr = store.tags.len();
+                    ExternalValue::Tag { addr }
+                }
+            }
+        })
+        .collect()
 }
 
 include!(concat!(env!("OUT_DIR"), "/spec_tests_generated.rs"));

@@ -8,8 +8,8 @@ use crate::binary_grammar::{
     Mutability, RefType, ValueType,
 };
 use crate::execution_grammar::{
-    Entry, ExternalValue, Frame, FunctionInstance, GlobalInstance, Label, ModuleInstance, Ref,
-    Stack, Value,
+    Entry, ExportInstance, ExternalValue, Frame, FunctionInstance, GlobalInstance, Label,
+    ModuleInstance, Ref, Stack, Value,
 };
 use crate::{AddrType, Store};
 use crate::{Parser, PAGE_SIZE};
@@ -183,8 +183,18 @@ impl Interpreter {
         // Remove temp globals — allocate_module will add them properly
         store.globals.truncate(num_imported_globals);
 
-        // step 20
-        // todo: no table init exprs in 2.0
+        // step 20: evaluate table init expressions
+        let initial_table_refs = module
+            .tables
+            .iter()
+            .map(|td| {
+                let val = eval_const_expr(&td.init, &store)?;
+                match val {
+                    Value::Ref(r) => Ok(r),
+                    _ => bail!("table init expr must produce a ref"),
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
 
         // step 21 - todo: evaluate element segment exprs
         let _element_segment_refs: Vec<Vec<Ref>> = vec![];
@@ -200,7 +210,7 @@ impl Interpreter {
             module,
             external_addresses,
             initial_global_values,
-            vec![], // initial_table_refs - todo
+            initial_table_refs,
             _element_segment_refs,
         )?;
 
@@ -322,6 +332,14 @@ impl Interpreter {
 
     pub const fn store_mut(&mut self) -> &mut Store {
         &mut self.store
+    }
+
+    pub fn into_store(self) -> Store {
+        self.store
+    }
+
+    pub fn module_exports(&self) -> &[ExportInstance] {
+        &self.module_instances[0].exports
     }
 
     fn get_func_param_types(&self, function_addr: usize) -> Result<Vec<ValueType>> {

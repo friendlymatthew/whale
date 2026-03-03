@@ -6,7 +6,8 @@ pub use binary_grammar::{
 };
 
 pub use execution_grammar::{
-    ExternalValue, FunctionInstance, GlobalInstance, MemoryInstance, Ref, TableInstance, Value,
+    ExportInstance, ExternalValue, FunctionInstance, GlobalInstance, MemoryInstance, Ref,
+    TableInstance, Value,
 };
 pub use interpreter::{ExecutionState, Interpreter};
 pub use parser::*;
