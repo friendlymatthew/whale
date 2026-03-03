@@ -186,7 +186,7 @@ pub enum Mutability {
     Var,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GlobalType {
     pub value_type: ValueType,
     pub mutability: Mutability,

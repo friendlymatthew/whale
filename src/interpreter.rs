@@ -8,7 +8,8 @@ use crate::binary_grammar::{
     Mutability, RefType, ValueType,
 };
 use crate::execution_grammar::{
-    Entry, ExternalValue, Frame, FunctionInstance, Label, ModuleInstance, Ref, Stack, Value,
+    Entry, ExternalValue, Frame, FunctionInstance, GlobalInstance, Label, ModuleInstance, Ref,
+    Stack, Value,
 };
 use crate::{AddrType, Store};
 use crate::{Parser, PAGE_SIZE};
@@ -167,13 +168,20 @@ impl Interpreter {
             ..Default::default()
         }));
 
-        // step 19: evaluate global init expressions relative to module_instance_0
-        // (which only has imported globals, so global.get can reference those)
-        let initial_global_values = module
-            .globals
-            .iter()
-            .map(|g| eval_const_expr(&g.initial_expression, &store))
-            .collect::<Result<Vec<_>>>()?;
+        // step 19: evaluate global init expressions sequentially so that each
+        // newly created global is visible to subsequent global.get in const exprs
+        let num_imported_globals = store.globals.len();
+        let mut initial_global_values = Vec::new();
+        for g in &module.globals {
+            let value = eval_const_expr(&g.initial_expression, &store)?;
+            store.globals.push(GlobalInstance {
+                global_type: g.global_type.clone(),
+                value,
+            });
+            initial_global_values.push(value);
+        }
+        // Remove temp globals — allocate_module will add them properly
+        store.globals.truncate(num_imported_globals);
 
         // step 20
         // todo: no table init exprs in 2.0
