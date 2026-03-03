@@ -862,9 +862,9 @@ impl Interpreter {
 
                     let table = &self.store.tables[table_addr];
                     let old_size = table.elem.len();
-                    let new_size = old_size as u64 + n as u64;
+                    let new_size = (old_size as u64).checked_add(n as u64);
 
-                    if new_size > table.table_type.limit.max {
+                    if new_size.is_none_or(|s| s > table.table_type.limit.max) {
                         match addr_type {
                             AddrType::I32 => self.stack.push(-1_i32),
                             AddrType::I64 => self.stack.push(-1_i64),
@@ -872,6 +872,7 @@ impl Interpreter {
                         continue;
                     }
 
+                    let new_size = new_size.unwrap();
                     let table = &mut self.store.tables[table_addr];
                     table.elem.resize(new_size as usize, r);
                     table.table_type.limit.min = new_size;
