@@ -69,6 +69,8 @@ pub struct Interpreter {
 }
 
 impl Interpreter {
+    const MAX_CALL_DEPTH: usize = 1024;
+
     pub fn new(module_data: &[u8]) -> Result<Self> {
         Self::instantiate(Store::new(), module_data, vec![])
     }
@@ -250,7 +252,7 @@ impl Interpreter {
             stack,
             store,
             globals: vec![],
-            call_stack: vec![],
+            call_stack: Vec::with_capacity(Self::MAX_CALL_DEPTH),
             fuel: None,
             pending_arity: None,
         };
@@ -2060,6 +2062,10 @@ impl Interpreter {
     }
 
     fn push_function_call(&mut self, function_addr: usize) -> Result<()> {
+        ensure!(
+            self.call_stack.len() < Self::MAX_CALL_DEPTH,
+            "call stack exhausted"
+        );
         let function_instance = &self.store.functions[function_addr];
 
         match function_instance {
