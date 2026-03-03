@@ -68,6 +68,9 @@ mod spec_tests {
             let mut modules = Vec::new();
             // Track (register ...) directives: maps registered name -> module index
             let mut registered: Vec<(String, i32)> = Vec::new();
+            let mut malformed_idx: u32 = 0;
+            let mut unlinkable_idx: u32 = 0;
+            let mut trap_module_idx: u32 = 0;
 
             for directive in wast.directives {
                 match directive {
@@ -114,12 +117,63 @@ mod spec_tests {
                     }
 
                     WastDirective::AssertTrap { exec, .. } => {
+                        match exec {
+                            WastExecute::Invoke(ref invoke) => {
+                                if module_idx < 0 {
+                                    continue;
+                                }
+                                if invoke.module.is_some() {
+                                    continue;
+                                }
+
+                                let Some(args_code) = render_args(&invoke.args) else {
+                                    continue;
+                                };
+
+                                let steps = &mut modules.last_mut().unwrap().1;
+                                let step_idx = steps.len();
+                                steps.push(format!(
+                                    "    spec_step_assert_trap(&mut interp, \"{}\", &[{}], {}, &mut failures);",
+                                    invoke.name, args_code, step_idx
+                                ));
+                            }
+                            WastExecute::Wat(mut wat) => {
+                                let Ok(bytes) = wat.encode() else {
+                                    trap_module_idx += 1;
+                                    continue;
+                                };
+                                let wasm_path = wasm_dir.join(format!(
+                                    "trap_module_{}_{}.wasm",
+                                    safe_name, trap_module_idx
+                                ));
+                                fs::write(&wasm_path, bytes).unwrap();
+                                let test_name =
+                                    format!("trap_module_{}_{}", safe_name, trap_module_idx);
+                                all_tests.push_str(&format!(
+                                    concat!(
+                                        "#[test]\n",
+                                        "fn {test_name}() {{\n",
+                                        "    let wasm_bytes: &[u8] = include_bytes!(concat!(env!(\"OUT_DIR\"), \"/wasm/trap_module_{file}_{idx}.wasm\"));\n",
+                                        "    let mut store = Store::new();\n",
+                                        "    let imports = setup_spectest_imports(&mut store, wasm_bytes);\n",
+                                        "    let result = Interpreter::instantiate(store, wasm_bytes, imports);\n",
+                                        "    assert!(result.is_err(), \"expected module instantiation to trap, but it succeeded\");\n",
+                                        "}}\n",
+                                    ),
+                                    test_name = test_name,
+                                    file = safe_name,
+                                    idx = trap_module_idx,
+                                ));
+                                trap_module_idx += 1;
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    WastDirective::AssertExhaustion { call: ref invoke, .. } => {
                         if module_idx < 0 {
                             continue;
                         }
-                        let WastExecute::Invoke(ref invoke) = exec else {
-                            continue;
-                        };
                         if invoke.module.is_some() {
                             continue;
                         }
@@ -153,6 +207,64 @@ mod spec_tests {
                             "    spec_step_invoke(&mut interp, \"{}\", &[{}]);",
                             invoke.name, args_code
                         ));
+                    }
+
+                    WastDirective::AssertMalformed { mut module, .. } => {
+                        let Ok(bytes) = module.encode() else {
+                            malformed_idx += 1;
+                            continue;
+                        };
+                        let wasm_path = wasm_dir.join(format!(
+                            "malformed_{}_{}.wasm",
+                            safe_name, malformed_idx
+                        ));
+                        fs::write(&wasm_path, bytes).unwrap();
+                        let test_name =
+                            format!("malformed_{}_{}", safe_name, malformed_idx);
+                        all_tests.push_str(&format!(
+                            concat!(
+                                "#[test]\n",
+                                "fn {test_name}() {{\n",
+                                "    let wasm_bytes: &[u8] = include_bytes!(concat!(env!(\"OUT_DIR\"), \"/wasm/malformed_{file}_{idx}.wasm\"));\n",
+                                "    let result = Parser::new(wasm_bytes).parse_module();\n",
+                                "    assert!(result.is_err(), \"expected malformed module to fail parsing, but it succeeded\");\n",
+                                "}}\n",
+                            ),
+                            test_name = test_name,
+                            file = safe_name,
+                            idx = malformed_idx,
+                        ));
+                        malformed_idx += 1;
+                    }
+
+                    WastDirective::AssertUnlinkable { mut module, .. } => {
+                        let Ok(bytes) = module.encode() else {
+                            unlinkable_idx += 1;
+                            continue;
+                        };
+                        let wasm_path = wasm_dir.join(format!(
+                            "unlinkable_{}_{}.wasm",
+                            safe_name, unlinkable_idx
+                        ));
+                        fs::write(&wasm_path, bytes).unwrap();
+                        let test_name =
+                            format!("unlinkable_{}_{}", safe_name, unlinkable_idx);
+                        all_tests.push_str(&format!(
+                            concat!(
+                                "#[test]\n",
+                                "fn {test_name}() {{\n",
+                                "    let wasm_bytes: &[u8] = include_bytes!(concat!(env!(\"OUT_DIR\"), \"/wasm/unlinkable_{file}_{idx}.wasm\"));\n",
+                                "    let mut store = Store::new();\n",
+                                "    let imports = setup_spectest_imports(&mut store, wasm_bytes);\n",
+                                "    let result = Interpreter::instantiate(store, wasm_bytes, imports);\n",
+                                "    assert!(result.is_err(), \"expected unlinkable module to fail instantiation, but it succeeded\");\n",
+                                "}}\n",
+                            ),
+                            test_name = test_name,
+                            file = safe_name,
+                            idx = unlinkable_idx,
+                        ));
+                        unlinkable_idx += 1;
                     }
 
                     _ => {}
@@ -296,6 +408,15 @@ mod spec_tests {
                 WastArg::Core(WastArgCore::F64(v)) => {
                     Some(format!("Value::F64(f64::from_bits({}))", v.bits))
                 }
+                WastArg::Core(WastArgCore::RefNull(_)) => {
+                    Some("Value::Ref(Ref::Null)".to_string())
+                }
+                WastArg::Core(WastArgCore::RefExtern(n)) => {
+                    Some(format!("Value::Ref(Ref::RefExtern({} as usize))", n))
+                }
+                WastArg::Core(WastArgCore::RefHost(n)) => {
+                    Some(format!("Value::Ref(Ref::RefExtern({} as usize))", n))
+                }
                 _ => None,
             })
             .collect();
@@ -334,6 +455,31 @@ mod spec_tests {
                         format!("ExpectedValue::F64(NanPat::Value({}))", v.bits)
                     }
                 }),
+                WastRet::Core(WastRetCore::RefNull(_)) => {
+                    Some("ExpectedValue::Ref(ExpectedRef::Null)".to_string())
+                }
+                WastRet::Core(WastRetCore::RefExtern(Some(n))) => {
+                    Some(format!("ExpectedValue::Ref(ExpectedRef::Extern(Some({})))", n))
+                }
+                WastRet::Core(WastRetCore::RefExtern(None)) => {
+                    Some("ExpectedValue::Ref(ExpectedRef::Extern(None))".to_string())
+                }
+                WastRet::Core(WastRetCore::RefHost(n)) => {
+                    Some(format!("ExpectedValue::Ref(ExpectedRef::Extern(Some({})))", n))
+                }
+                WastRet::Core(WastRetCore::RefFunc(_)) => {
+                    Some("ExpectedValue::Ref(ExpectedRef::Func)".to_string())
+                }
+                WastRet::Core(WastRetCore::RefAny
+                    | WastRetCore::RefEq
+                    | WastRetCore::RefStruct
+                    | WastRetCore::RefArray) => {
+                    Some("ExpectedValue::Ref(ExpectedRef::NonNull)".to_string())
+                }
+                WastRet::Core(WastRetCore::RefI31 | WastRetCore::RefI31Shared) => {
+                    Some("ExpectedValue::Ref(ExpectedRef::I31)".to_string())
+                }
+                WastRet::Core(WastRetCore::Either(_)) => None,
                 _ => None,
             })
             .collect();

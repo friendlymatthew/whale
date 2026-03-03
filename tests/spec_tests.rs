@@ -12,11 +12,21 @@ enum NanPat<T> {
 }
 
 #[derive(Debug)]
+enum ExpectedRef {
+    Null,
+    Extern(Option<u32>),
+    Func,
+    NonNull,
+    I31,
+}
+
+#[derive(Debug)]
 enum ExpectedValue {
     I32(i32),
     I64(i64),
     F32(NanPat<u32>),
     F64(NanPat<u64>),
+    Ref(ExpectedRef),
 }
 
 /// Create a spectest-style memory: 1 page initial, 2 pages max
@@ -162,6 +172,15 @@ fn values_match(expected: &[ExpectedValue], actual: &[Value]) -> bool {
                 NanPat::CanonicalNan => a.is_nan() && (a.to_bits() & 0x0007_FFFF_FFFF_FFFF == 0),
                 NanPat::ArithmeticNan => a.is_nan(),
                 NanPat::Value(e) => a.to_bits() == *e,
+            },
+            (ExpectedValue::Ref(exp_ref), Value::Ref(act_ref)) => match (exp_ref, act_ref) {
+                (ExpectedRef::Null, Ref::Null) => true,
+                (ExpectedRef::Extern(Some(n)), Ref::RefExtern(m)) => *n as usize == *m,
+                (ExpectedRef::Extern(None), Ref::RefExtern(_)) => true,
+                (ExpectedRef::Func, Ref::FunctionAddr(_)) => true,
+                (ExpectedRef::NonNull, r) => *r != Ref::Null,
+                (ExpectedRef::I31, Ref::I31(_)) => true,
+                _ => false,
             },
             _ => false,
         })
