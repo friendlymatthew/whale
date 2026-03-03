@@ -192,6 +192,9 @@ impl Interpreter {
         // step 22-23
         let _z = stack.pop()?;
 
+        // save start function index before module is moved
+        let start_func_idx = module.start;
+
         // step 24
         let module_instance = store.allocate_module(
             module,
@@ -237,6 +240,16 @@ impl Interpreter {
                 control_stack: vec![],
                 frame,
             });
+            interpreter.run()?;
+        }
+
+        // step 29: invoke start function if present
+        if let Some(start_idx) = start_func_idx {
+            let func_addr = *interpreter.module_instances[0]
+                .function_addrs
+                .get(start_idx as usize)
+                .ok_or_else(|| anyhow!("start function index {} out of bounds", start_idx))?;
+            interpreter.push_function_call(func_addr)?;
             interpreter.run()?;
         }
 
