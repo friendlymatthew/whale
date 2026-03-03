@@ -627,9 +627,24 @@ impl Interpreter {
                 Instruction::TryTable(_, _, _) => todo!(),
                 Instruction::BrOnNull(_) => todo!(),
                 Instruction::BrOnNonNull(_) => todo!(),
-                Instruction::RefNull(_) => todo!(),
-                Instruction::RefIsNull => todo!(),
-                Instruction::RefFunc(_) => todo!(),
+                Instruction::RefNull(_) => {
+                    self.stack.push(Value::Ref(Ref::Null));
+                }
+                Instruction::RefIsNull => {
+                    let val = self.stack.pop_value()?;
+                    let is_null = matches!(val, Value::Ref(Ref::Null));
+                    self.stack.push(is_null as i32);
+                }
+                Instruction::RefFunc(x) => {
+                    let addr = *self.call_stack[depth]
+                        .frame
+                        .module
+                        .function_addrs
+                        .get(x as usize)
+                        .ok_or_else(|| anyhow!("Function index {} out of bounds", x))?;
+
+                    self.stack.push(Value::Ref(Ref::FunctionAddr(addr)));
+                }
                 Instruction::Drop => {
                     let _ = self.stack.pop();
                 }
