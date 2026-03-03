@@ -11,8 +11,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let wasm_bytes = std::fs::read("stair_climb.wasm")?;
 
     // run to completion as a reference
-    let mut reference = Interpreter::new(&wasm_bytes)?;
-    let full_result = reference
+    let full_result = Interpreter::new(&wasm_bytes)?
         .invoke("stair_climb", vec![Value::I32(4)])?
         .into_completed()?;
 
@@ -30,7 +29,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // restored on another machine, in another process, whatever
     let mut restored = Interpreter::from_snapshot(&snapshot)?;
-    restored.set_fuel(10000);
+    restored.set_fuel(10_000);
 
     let resumed_result = restored.resume()?.into_completed()?;
 
@@ -42,7 +41,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 # Status
 
-`gabagool` is tested against the [WebAssembly spec test suite](https://github.com/WebAssembly/spec/tree/main/test/core). Each test is a compiled wasm module. It currently passes 856 modules out of 1,072 (79%).
+`gabagool` is tested against the [WebAssembly spec test suite](https://github.com/WebAssembly/spec/tree/main/test/core).
+
+1,681 tests pass out of 2,058 (82%). `gabagool` passes on arithmetic, control flow, memory, tables, globals, function references, and imports/exports. It _currently_ fails on garbage collection, exceptions, and tail calls.
+
+Our testing harness uses modules from the test suite that cover execution, traps, resource exhaustion, and rejection (modules that should fail to parse or instantiate). We omit validation, cross-module invocation, and SIMD modules.
 
 ```sh
 # run the test suite
