@@ -3,8 +3,11 @@ use std::fmt::{Debug, Formatter};
 use anyhow::{anyhow, bail, ensure, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::binary_grammar::{
-    Function, FunctionType, GlobalType, MemoryType, RefType, SubType, TableType, ValueType,
+use crate::{
+    binary_grammar::{
+        Function, FunctionType, GlobalType, MemoryType, RefType, SubType, TableType, ValueType,
+    },
+    AddrType,
 };
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -310,6 +313,13 @@ impl Stack {
         self.0.push(entry.into());
     }
 
+    pub fn push_address(&mut self, address: usize, addr_type: AddrType) {
+        match addr_type {
+            AddrType::I32 => self.push(address as i32),
+            AddrType::I64 => self.push(address as i64),
+        }
+    }
+
     pub fn extend<E: Into<Entry>, I: IntoIterator<Item = E>>(&mut self, iter: I) {
         self.0.extend(iter.into_iter().map(Into::into));
     }
@@ -322,6 +332,16 @@ impl Stack {
         match self.pop()? {
             Entry::Value(v) => Ok(v),
             foreign => bail!("not value, got: {:?}", foreign),
+        }
+    }
+
+    pub fn pop_address(&mut self, addr_type: AddrType) -> Result<usize> {
+        let value = self.pop_value()?;
+
+        match (value, addr_type) {
+            (Value::I32(a), AddrType::I32) => Ok(a as usize),
+            (Value::I64(a), AddrType::I64) => Ok(a as usize),
+            foreign => bail!("expected {addr_type:?} table index, got: {foreign:?}"),
         }
     }
 

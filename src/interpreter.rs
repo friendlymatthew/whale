@@ -204,8 +204,7 @@ impl Interpreter {
                 es.expression
                     .iter()
                     .map(|expr| {
-                        let val =
-                            eval_const_expr_with_module(expr, &store, &module_instance_0)?;
+                        let val = eval_const_expr_with_module(expr, &store, &module_instance_0)?;
                         match val {
                             Value::Ref(r) => Ok(r),
                             _ => bail!("element expr must produce a ref"),
@@ -639,14 +638,16 @@ impl Interpreter {
                     self.push_function_call(a)?;
                 }
                 Instruction::CallIndirect(type_idx, table_idx) => {
-                    let i: i32 = self.stack.pop_value()?.try_into()?;
-
                     let frame_module = &self.call_stack[depth].frame.module;
                     let table_addr = frame_module.table_addrs[table_idx as usize];
                     let table = &self.store.tables[table_addr];
+                    let addr_type = table.table_type.addr_type;
+
+                    let i = self.stack.pop_address(addr_type)?;
+
                     let elem = table
                         .elem
-                        .get(i as usize)
+                        .get(i)
                         .ok_or_else(|| anyhow!("trap: undefined element"))?;
 
                     let Ref::FunctionAddr(func_addr) = elem else {
@@ -760,11 +761,11 @@ impl Interpreter {
                 }
                 Instruction::TableGet(x) => {
                     let table_addr = self.call_stack[depth].frame.module.table_addrs[x as usize];
-                    let i: i32 = self.stack.pop_value()?.try_into()?;
                     let table = &self.store.tables[table_addr];
+                    let i = self.stack.pop_address(table.table_type.addr_type)?;
                     let elem = table
                         .elem
-                        .get(i as usize)
+                        .get(i)
                         .ok_or_else(|| anyhow!("trap: out of bounds table access"))?;
                     self.stack.push(Value::Ref(*elem));
                 }
@@ -774,11 +775,12 @@ impl Interpreter {
                     let Value::Ref(r) = val else {
                         bail!("expected ref value for table.set")
                     };
-                    let i: i32 = self.stack.pop_value()?.try_into()?;
+                    let addr_type = self.store.tables[table_addr].table_type.addr_type;
+                    let i = self.stack.pop_address(addr_type)?;
                     let table = &mut self.store.tables[table_addr];
                     let elem = table
                         .elem
-                        .get_mut(i as usize)
+                        .get_mut(i)
                         .ok_or_else(|| anyhow!("trap: out of bounds table access"))?;
                     *elem = r;
                 }
@@ -795,9 +797,10 @@ impl Interpreter {
 
                     let n: i32 = self.stack.pop_value()?.try_into()?;
                     let s: i32 = self.stack.pop_value()?.try_into()?;
-                    let d: i32 = self.stack.pop_value()?.try_into()?;
+                    let addr_type = self.store.tables[table_addr].table_type.addr_type;
+                    let d = self.stack.pop_address(addr_type)?;
 
-                    let (n, s, d) = (n as usize, s as usize, d as usize);
+                    let (n, s) = (n as usize, s as usize);
 
                     if s.saturating_add(n) > self.store.element_segments[elem_addr].elem.len() {
                         bail!("trap: out of bounds table access");
@@ -820,11 +823,16 @@ impl Interpreter {
                     let dst_addr = frame_module.table_addrs[dst_table as usize];
                     let src_addr = frame_module.table_addrs[src_table as usize];
 
-                    let n: i32 = self.stack.pop_value()?.try_into()?;
-                    let s: i32 = self.stack.pop_value()?.try_into()?;
-                    let d: i32 = self.stack.pop_value()?.try_into()?;
+                    let dst_at = self.store.tables[dst_addr].table_type.addr_type;
+                    let src_at = self.store.tables[src_addr].table_type.addr_type;
+                    let n_at = match (dst_at, src_at) {
+                        (AddrType::I64, AddrType::I64) => AddrType::I64,
+                        _ => AddrType::I32,
+                    };
 
-                    let (n, s, d) = (n as usize, s as usize, d as usize);
+                    let n = self.stack.pop_address(n_at)?;
+                    let s = self.stack.pop_address(src_at)?;
+                    let d = self.stack.pop_address(dst_at)?;
 
                     if s.saturating_add(n) > self.store.tables[src_addr].elem.len() {
                         bail!("trap: out of bounds table access");
@@ -844,41 +852,49 @@ impl Interpreter {
                 }
                 Instruction::TableGrow(x) => {
                     let table_addr = self.call_stack[depth].frame.module.table_addrs[x as usize];
-                    let n: i32 = self.stack.pop_value()?.try_into()?;
+                    let table = &self.store.tables[table_addr];
+                    let addr_type = table.table_type.addr_type;
+                    let n = self.stack.pop_address(addr_type)?;
 
                     let Value::Ref(r) = self.stack.pop_value()? else {
                         bail!("expected ref value for table.grow")
                     };
 
                     let table = &self.store.tables[table_addr];
-                    let old_size = table.elem.len() as u32;
-                    let new_size = old_size as u64 + n as u32 as u64;
+                    let old_size = table.elem.len();
+                    let new_size = old_size as u64 + n as u64;
 
                     if new_size > table.table_type.limit.max {
-                        self.stack.push(-1_i32);
+                        match addr_type {
+                            AddrType::I32 => self.stack.push(-1_i32),
+                            AddrType::I64 => self.stack.push(-1_i64),
+                        }
                         continue;
                     }
 
                     let table = &mut self.store.tables[table_addr];
                     table.elem.resize(new_size as usize, r);
                     table.table_type.limit.min = new_size;
-                    self.stack.push(old_size as i32);
+
+                    self.stack.push_address(old_size, addr_type);
                 }
                 Instruction::TableSize(x) => {
                     let table_addr = self.call_stack[depth].frame.module.table_addrs[x as usize];
-                    let size = self.store.tables[table_addr].elem.len() as i32;
-                    self.stack.push(size);
+                    let table = &self.store.tables[table_addr];
+                    let size = table.elem.len();
+                    self.stack.push_address(size, table.table_type.addr_type);
                 }
                 Instruction::TableFill(x) => {
                     let table_addr = self.call_stack[depth].frame.module.table_addrs[x as usize];
-                    let n: i32 = self.stack.pop_value()?.try_into()?;
+                    let addr_type = self.store.tables[table_addr].table_type.addr_type;
+
+                    let n = self.stack.pop_address(addr_type)?;
+
                     let Value::Ref(r) = self.stack.pop_value()? else {
                         bail!("expected ref value for table.fill")
                     };
 
-                    let i: i32 = self.stack.pop_value()?.try_into()?;
-
-                    let (n, i) = (n as usize, i as usize);
+                    let i = self.stack.pop_address(addr_type)?;
                     let table = &mut self.store.tables[table_addr];
 
                     if i.saturating_add(n) > table.elem.len() {
@@ -1029,10 +1045,8 @@ impl Interpreter {
                     mem_instance.data.resize(new_size * PAGE_SIZE, 0);
                     mem_instance.memory_type.limit.min = new_size as u64;
 
-                    match mem_instance.memory_type.addr_type {
-                        AddrType::I32 => self.stack.push(old_size as i32),
-                        AddrType::I64 => self.stack.push(old_size as i64),
-                    }
+                    self.stack
+                        .push_address(old_size, mem_instance.memory_type.addr_type);
                 }
                 Instruction::MemoryInit(data_idx, mem_idx) => {
                     let frame_module = &self.call_stack[depth].frame.module;
