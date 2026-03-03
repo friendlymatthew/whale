@@ -851,8 +851,8 @@ impl Interpreter {
                     };
 
                     let table = &self.store.tables[table_addr];
-                    let old_size = table.elem.len() as i32;
-                    let new_size = old_size as u64 + n as u64;
+                    let old_size = table.elem.len() as u32;
+                    let new_size = old_size as u64 + n as u32 as u64;
 
                     if new_size > table.table_type.limit.max {
                         self.stack.push(-1_i32);
@@ -862,7 +862,7 @@ impl Interpreter {
                     let table = &mut self.store.tables[table_addr];
                     table.elem.resize(new_size as usize, r);
                     table.table_type.limit.min = new_size;
-                    self.stack.push(old_size);
+                    self.stack.push(old_size as i32);
                 }
                 Instruction::TableSize(x) => {
                     let table_addr = self.call_stack[depth].frame.module.table_addrs[x as usize];
