@@ -588,7 +588,13 @@ impl Interpreter {
                         self.handle_branch(l, depth)?;
                     }
                 }
-                Instruction::BrTable(_, _) => todo!(),
+                Instruction::BrTable(labels, default) => {
+                    let i: i32 = self.stack.pop_value()?.try_into()?;
+                    let i = i as usize;
+
+                    let l = if i < labels.len() { labels[i] } else { default };
+                    self.handle_branch(l, depth)?;
+                }
                 Instruction::Throw(_) => todo!(),
                 Instruction::ThrowRef => todo!(),
                 Instruction::Return => {
