@@ -164,7 +164,7 @@ impl Interpreter {
 
         // step 16-18
         stack.push(Entry::Activation(Frame {
-            module: module_instance_0,
+            module: module_instance_0.clone(),
             ..Default::default()
         }));
 
@@ -173,11 +173,14 @@ impl Interpreter {
         let num_imported_globals = store.globals.len();
         let mut initial_global_values = Vec::new();
         for g in &module.globals {
-            let value = eval_const_expr(&g.initial_expression, &store)?;
+            let value =
+                eval_const_expr_with_module(&g.initial_expression, &store, &module_instance_0)?;
+            let addr = store.globals.len();
             store.globals.push(GlobalInstance {
                 global_type: g.global_type.clone(),
                 value,
             });
+            module_instance_0.global_addrs.push(addr);
             initial_global_values.push(value);
         }
         // step 20: evaluate table init expressions
@@ -185,7 +188,7 @@ impl Interpreter {
             .tables
             .iter()
             .map(|td| {
-                let val = eval_const_expr(&td.init, &store)?;
+                let val = eval_const_expr_with_module(&td.init, &store, &module_instance_0)?;
                 match val {
                     Value::Ref(r) => Ok(r),
                     _ => bail!("table init expr must produce a ref"),
@@ -201,7 +204,8 @@ impl Interpreter {
                 es.expression
                     .iter()
                     .map(|expr| {
-                        let val = eval_const_expr(expr, &store)?;
+                        let val =
+                            eval_const_expr_with_module(expr, &store, &module_instance_0)?;
                         match val {
                             Value::Ref(r) => Ok(r),
                             _ => bail!("element expr must produce a ref"),
@@ -2142,7 +2146,23 @@ fn run_elem(index: u32, element_segment: &ElementSegment) -> Vec<Instruction> {
     }
 }
 
+fn eval_const_expr_with_module(
+    expr: &[Instruction],
+    store: &Store,
+    module: &ModuleInstance,
+) -> Result<Value> {
+    eval_const_expr_inner(expr, store, Some(module))
+}
+
 fn eval_const_expr(expr: &[Instruction], store: &Store) -> Result<Value> {
+    eval_const_expr_inner(expr, store, None)
+}
+
+fn eval_const_expr_inner(
+    expr: &[Instruction],
+    store: &Store,
+    module: Option<&ModuleInstance>,
+) -> Result<Value> {
     let mut stack = Vec::new();
 
     // i really don't love how we're rewriting a lot of the instructions
@@ -2156,13 +2176,27 @@ fn eval_const_expr(expr: &[Instruction], store: &Store) -> Result<Value> {
             Instruction::V128Const(v) => stack.push(Value::V128(*v)),
             Instruction::RefNull(_) => stack.push(Value::Ref(Ref::Null)),
             Instruction::RefFunc(idx) => {
-                stack.push(Value::Ref(Ref::FunctionAddr(*idx as usize)));
+                let addr = if let Some(m) = module {
+                    *m.function_addrs
+                        .get(*idx as usize)
+                        .ok_or_else(|| anyhow!("ref.func index {} oob", idx))?
+                } else {
+                    *idx as usize
+                };
+                stack.push(Value::Ref(Ref::FunctionAddr(addr)));
             }
             Instruction::GlobalGet(idx) => {
+                let store_idx = if let Some(m) = module {
+                    *m.global_addrs
+                        .get(*idx as usize)
+                        .ok_or_else(|| anyhow!("global index {} oob in const expr", idx))?
+                } else {
+                    *idx as usize
+                };
                 let global = store
                     .globals
-                    .get(*idx as usize)
-                    .ok_or_else(|| anyhow!("global index {} oob in const expr", idx))?;
+                    .get(store_idx)
+                    .ok_or_else(|| anyhow!("global store index {} oob in const expr", store_idx))?;
                 stack.push(global.value);
             }
             Instruction::RefI31 => {
