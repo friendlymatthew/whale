@@ -12,6 +12,7 @@ pub enum Ref {
     Null,
     FunctionAddr(usize),
     RefExtern(usize),
+    I31(i32),
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Serialize, Deserialize)]

@@ -1955,6 +1955,10 @@ fn eval_const_expr(expr: &[Instruction], store: &Store) -> Result<Value> {
                     .ok_or_else(|| anyhow!("global index {} oob in const expr", idx))?;
                 stack.push(global.value);
             }
+            Instruction::RefI31 => {
+                let v = pop_i32(&mut stack)?;
+                stack.push(Value::Ref(Ref::I31(v & 0x7FFF_FFFF)));
+            }
             // 3.0
             Instruction::I32Add => {
                 let (b, a) = (pop_i32(&mut stack)?, pop_i32(&mut stack)?);
