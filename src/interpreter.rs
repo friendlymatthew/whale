@@ -4,8 +4,8 @@ use std::mem;
 use std::ops::Neg;
 
 use crate::binary_grammar::{
-    BlockType, DataMode, DataSegment, ElementMode, ElementSegment, ImportDescription, Instruction,
-    Mutability, RefType, ValueType,
+    BlockType, CompositeType, DataMode, DataSegment, ElementMode, ElementSegment,
+    ImportDescription, Instruction, Mutability, RefType, ValueType,
 };
 use crate::execution_grammar::{
     Entry, ExportInstance, ExternalValue, Frame, FunctionInstance, GlobalInstance, Label,
@@ -122,7 +122,7 @@ impl Interpreter {
             .collect::<Vec<_>>();
 
         // step 7
-        let _element_instructions = module
+        let element_instructions = module
             .element_segments
             .iter()
             .enumerate()
@@ -180,9 +180,6 @@ impl Interpreter {
             });
             initial_global_values.push(value);
         }
-        // Remove temp globals — allocate_module will add them properly
-        store.globals.truncate(num_imported_globals);
-
         // step 20: evaluate table init expressions
         let initial_table_refs = module
             .tables
@@ -196,8 +193,26 @@ impl Interpreter {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        // step 21 - todo: evaluate element segment exprs
-        let _element_segment_refs: Vec<Vec<Ref>> = vec![];
+        // step 21 - evaluate element segment exprs
+        let element_segment_refs = module
+            .element_segments
+            .iter()
+            .map(|es| {
+                es.expression
+                    .iter()
+                    .map(|expr| {
+                        let val = eval_const_expr(expr, &store)?;
+                        match val {
+                            Value::Ref(r) => Ok(r),
+                            _ => bail!("element expr must produce a ref"),
+                        }
+                    })
+                    .collect::<Result<Vec<_>>>()
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        // Remove temp globals — allocate_module will add them properly
+        store.globals.truncate(num_imported_globals);
 
         // step 22-23
         let _z = stack.pop()?;
@@ -211,7 +226,7 @@ impl Interpreter {
             external_addresses,
             initial_global_values,
             initial_table_refs,
-            _element_segment_refs,
+            element_segment_refs,
         )?;
 
         // step 25-26
@@ -220,8 +235,7 @@ impl Interpreter {
             ..Default::default()
         }));
 
-        // step 27 - todo: execute _element_instructions
-
+        // step 27 - execute element segment initialization
         // step 28 - execute data segment initialization
         // step 29 - todo: if module has start function, call it
 
@@ -238,14 +252,15 @@ impl Interpreter {
             pending_arity: None,
         };
 
-        if !data_instructions.is_empty() {
+        let init_instructions = [element_instructions, data_instructions].concat();
+        if !init_instructions.is_empty() {
             let frame = Frame {
                 module: interpreter.module_instances[0].clone(),
                 ..Default::default()
             };
             interpreter.stack.push(Entry::Activation(frame.clone()));
             interpreter.call_stack.push(CallFrame {
-                instructions: data_instructions,
+                instructions: init_instructions,
                 pc: 0,
                 control_stack: vec![],
                 frame,
@@ -619,7 +634,40 @@ impl Interpreter {
                         .ok_or_else(|| anyhow!("Function index {} out of bounds", x))?;
                     self.push_function_call(a)?;
                 }
-                Instruction::CallIndirect(_, _) => todo!(),
+                Instruction::CallIndirect(type_idx, table_idx) => {
+                    let i: i32 = self.stack.pop_value()?.try_into()?;
+
+                    let frame_module = &self.call_stack[depth].frame.module;
+                    let table_addr = frame_module.table_addrs[table_idx as usize];
+                    let table = &self.store.tables[table_addr];
+                    let elem = table
+                        .elem
+                        .get(i as usize)
+                        .ok_or_else(|| anyhow!("trap: undefined element"))?;
+
+                    let Ref::FunctionAddr(func_addr) = elem else {
+                        bail!("trap: uninitialized element {}", i)
+                    };
+                    let expected_type = match &frame_module
+                        .types
+                        .get(type_idx as usize)
+                        .ok_or_else(|| anyhow!("type index {} out of bounds", type_idx))?
+                        .composite_type
+                    {
+                        CompositeType::Func(ft) => ft,
+                        _ => bail!("type index {} is not a function type", type_idx),
+                    };
+                    let actual_type = match &self.store.functions[*func_addr] {
+                        FunctionInstance::Local { function_type, .. } => function_type,
+                        FunctionInstance::Host { function_type, .. } => function_type,
+                    };
+                    ensure!(
+                        expected_type.0 .0.len() == actual_type.0 .0.len()
+                            && expected_type.1 .0.len() == actual_type.1 .0.len(),
+                        "trap: indirect call type mismatch"
+                    );
+                    self.push_function_call(*func_addr)?;
+                }
                 Instruction::ReturnCall(_) => todo!(),
                 Instruction::ReturnCallIndirect(_, _) => todo!(),
                 Instruction::CallRef(_) => todo!(),
@@ -706,14 +754,137 @@ impl Interpreter {
 
                     global.value = self.stack.pop_value()?;
                 }
-                Instruction::TableGet(_) => todo!(),
-                Instruction::TableSet(_) => todo!(),
-                Instruction::TableInit(_, _) => todo!(),
-                Instruction::ElemDrop(_) => todo!(),
-                Instruction::TableCopy(_, _) => todo!(),
-                Instruction::TableGrow(_) => todo!(),
-                Instruction::TableSize(_) => todo!(),
-                Instruction::TableFill(_) => todo!(),
+                Instruction::TableGet(x) => {
+                    let table_addr = self.call_stack[depth].frame.module.table_addrs[x as usize];
+                    let i: i32 = self.stack.pop_value()?.try_into()?;
+                    let table = &self.store.tables[table_addr];
+                    let elem = table
+                        .elem
+                        .get(i as usize)
+                        .ok_or_else(|| anyhow!("trap: out of bounds table access"))?;
+                    self.stack.push(Value::Ref(*elem));
+                }
+                Instruction::TableSet(x) => {
+                    let table_addr = self.call_stack[depth].frame.module.table_addrs[x as usize];
+                    let val = self.stack.pop_value()?;
+                    let Value::Ref(r) = val else {
+                        bail!("expected ref value for table.set")
+                    };
+                    let i: i32 = self.stack.pop_value()?.try_into()?;
+                    let table = &mut self.store.tables[table_addr];
+                    let elem = table
+                        .elem
+                        .get_mut(i as usize)
+                        .ok_or_else(|| anyhow!("trap: out of bounds table access"))?;
+                    *elem = r;
+                }
+                Instruction::TableInit(table_idx, elem_idx) => {
+                    let frame_module = &self.call_stack[depth].frame.module;
+                    let table_addr = *frame_module
+                        .table_addrs
+                        .get(table_idx as usize)
+                        .ok_or_else(|| anyhow!("trap: table index {} out of bounds", table_idx))?;
+                    let elem_addr = *frame_module
+                        .elem_addrs
+                        .get(elem_idx as usize)
+                        .ok_or_else(|| anyhow!("trap: elem index {} out of bounds", elem_idx))?;
+
+                    let n: i32 = self.stack.pop_value()?.try_into()?;
+                    let s: i32 = self.stack.pop_value()?.try_into()?;
+                    let d: i32 = self.stack.pop_value()?.try_into()?;
+
+                    let (n, s, d) = (n as usize, s as usize, d as usize);
+
+                    if s.saturating_add(n) > self.store.element_segments[elem_addr].elem.len() {
+                        bail!("trap: out of bounds table access");
+                    }
+                    if d.saturating_add(n) > self.store.tables[table_addr].elem.len() {
+                        bail!("trap: out of bounds table access");
+                    }
+
+                    if n > 0 {
+                        let src = self.store.element_segments[elem_addr].elem[s..s + n].to_vec();
+                        self.store.tables[table_addr].elem[d..d + n].copy_from_slice(&src);
+                    }
+                }
+                Instruction::ElemDrop(x) => {
+                    let elem_addr = self.call_stack[depth].frame.module.elem_addrs[x as usize];
+                    self.store.element_segments[elem_addr].elem.clear();
+                }
+                Instruction::TableCopy(dst_table, src_table) => {
+                    let frame_module = &self.call_stack[depth].frame.module;
+                    let dst_addr = frame_module.table_addrs[dst_table as usize];
+                    let src_addr = frame_module.table_addrs[src_table as usize];
+
+                    let n: i32 = self.stack.pop_value()?.try_into()?;
+                    let s: i32 = self.stack.pop_value()?.try_into()?;
+                    let d: i32 = self.stack.pop_value()?.try_into()?;
+
+                    let (n, s, d) = (n as usize, s as usize, d as usize);
+
+                    if s.saturating_add(n) > self.store.tables[src_addr].elem.len() {
+                        bail!("trap: out of bounds table access");
+                    }
+                    if d.saturating_add(n) > self.store.tables[dst_addr].elem.len() {
+                        bail!("trap: out of bounds table access");
+                    }
+
+                    if n > 0 {
+                        if dst_addr == src_addr {
+                            self.store.tables[dst_addr].elem.copy_within(s..s + n, d);
+                        } else {
+                            let src = self.store.tables[src_addr].elem[s..s + n].to_vec();
+                            self.store.tables[dst_addr].elem[d..d + n].copy_from_slice(&src);
+                        }
+                    }
+                }
+                Instruction::TableGrow(x) => {
+                    let table_addr = self.call_stack[depth].frame.module.table_addrs[x as usize];
+                    let n: i32 = self.stack.pop_value()?.try_into()?;
+
+                    let Value::Ref(r) = self.stack.pop_value()? else {
+                        bail!("expected ref value for table.grow")
+                    };
+
+                    let table = &self.store.tables[table_addr];
+                    let old_size = table.elem.len() as i32;
+                    let new_size = old_size as u64 + n as u64;
+
+                    if new_size > table.table_type.limit.max {
+                        self.stack.push(-1_i32);
+                        continue;
+                    }
+
+                    let table = &mut self.store.tables[table_addr];
+                    table.elem.resize(new_size as usize, r);
+                    table.table_type.limit.min = new_size;
+                    self.stack.push(old_size);
+                }
+                Instruction::TableSize(x) => {
+                    let table_addr = self.call_stack[depth].frame.module.table_addrs[x as usize];
+                    let size = self.store.tables[table_addr].elem.len() as i32;
+                    self.stack.push(size);
+                }
+                Instruction::TableFill(x) => {
+                    let table_addr = self.call_stack[depth].frame.module.table_addrs[x as usize];
+                    let n: i32 = self.stack.pop_value()?.try_into()?;
+                    let Value::Ref(r) = self.stack.pop_value()? else {
+                        bail!("expected ref value for table.fill")
+                    };
+
+                    let i: i32 = self.stack.pop_value()?.try_into()?;
+
+                    let (n, i) = (n as usize, i as usize);
+                    let table = &mut self.store.tables[table_addr];
+
+                    if i.saturating_add(n) > table.elem.len() {
+                        bail!("trap: out of bounds table access");
+                    }
+
+                    if n > 0 {
+                        table.elem[i..i + n].fill(r);
+                    }
+                }
                 Instruction::I32Load(ma) => {
                     mem_load!(self, depth, ma, 4, |b| i32::from_le_bytes(b))
                 }
@@ -730,7 +901,7 @@ impl Interpreter {
                     mem_load!(self, depth, ma, 1, |b| b[0] as i8 as i32)
                 }
                 Instruction::I32Load8Unsigned(ma) => {
-                    mem_load!(self, depth, ma, 1, |b| b[0] as u8 as i32)
+                    mem_load!(self, depth, ma, 1, |b| b[0] as i32)
                 }
                 Instruction::I32Load16Signed(ma) => {
                     mem_load!(self, depth, ma, 2, |b| i16::from_le_bytes(b) as i32)
@@ -742,7 +913,7 @@ impl Interpreter {
                     mem_load!(self, depth, ma, 1, |b| b[0] as i8 as i64)
                 }
                 Instruction::I64Load8Unsigned(ma) => {
-                    mem_load!(self, depth, ma, 1, |b| b[0] as u8 as i64)
+                    mem_load!(self, depth, ma, 1, |b| b[0] as i64)
                 }
                 Instruction::I64Load16Signed(ma) => {
                     mem_load!(self, depth, ma, 2, |b| i16::from_le_bytes(b) as i64)

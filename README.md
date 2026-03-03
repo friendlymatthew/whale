@@ -42,7 +42,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 # Status
 
-`gabagool` is tested against the [WebAssembly spec test suite](https://github.com/WebAssembly/spec/tree/main/test/core). Each test is a compiled wasm module. It currently passes 742 modules out of 1,072 (69%).
+`gabagool` is tested against the [WebAssembly spec test suite](https://github.com/WebAssembly/spec/tree/main/test/core). Each test is a compiled wasm module. It currently passes 856 modules out of 1,072 (79%).
 
 ```sh
 # run the test suite
