@@ -1353,11 +1353,11 @@ impl<'a> Parser<'a> {
         let segment = match self.read_u32()? {
             0 => {
                 let offset = self.parse_expression()?;
-                let expression = vec![self
+                let expression = self
                     .parse_vec(Self::read_u32)?
-                    .iter()
-                    .map(|idx| Instruction::RefFunc(*idx))
-                    .collect::<Vec<_>>()];
+                    .into_iter()
+                    .map(|idx| vec![Instruction::RefFunc(idx)])
+                    .collect::<Vec<_>>();
 
                 ElementSegment {
                     ref_type: RefType::FuncRef,
@@ -1371,11 +1371,11 @@ impl<'a> Parser<'a> {
             1 => {
                 ensure!(self.read_u8()? == 0x00, "Expected elemkind 0x00.");
 
-                let expression = vec![self
+                let expression = self
                     .parse_vec(Self::read_u32)?
-                    .iter()
-                    .map(|idx| Instruction::RefFunc(*idx))
-                    .collect::<Vec<_>>()];
+                    .into_iter()
+                    .map(|idx| vec![Instruction::RefFunc(idx)])
+                    .collect::<Vec<_>>();
 
                 ElementSegment {
                     ref_type: RefType::FuncRef,
@@ -1388,11 +1388,11 @@ impl<'a> Parser<'a> {
                 let offset = self.parse_expression()?;
                 ensure!(self.read_u8()? == 0x00, "Expected elemkind 0x00.");
 
-                let expression = vec![self
+                let expression = self
                     .parse_vec(Self::read_u32)?
-                    .iter()
-                    .map(|idx| Instruction::RefFunc(*idx))
-                    .collect::<Vec<_>>()];
+                    .into_iter()
+                    .map(|idx| vec![Instruction::RefFunc(idx)])
+                    .collect::<Vec<_>>();
 
                 ElementSegment {
                     ref_type: RefType::FuncRef,
@@ -1406,11 +1406,11 @@ impl<'a> Parser<'a> {
             3 => {
                 ensure!(self.read_u8()? == 0x00, "Expected elemkind 0x00.");
 
-                let expression = vec![self
+                let expression = self
                     .parse_vec(Self::read_u32)?
-                    .iter()
-                    .map(|idx| Instruction::RefFunc(*idx))
-                    .collect::<Vec<_>>()];
+                    .into_iter()
+                    .map(|idx| vec![Instruction::RefFunc(idx)])
+                    .collect::<Vec<_>>();
 
                 ElementSegment {
                     ref_type: RefType::FuncRef,
