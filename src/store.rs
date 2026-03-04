@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use anyhow::{anyhow, bail, Result};
 
 use crate::binary_grammar::{
@@ -61,7 +63,7 @@ impl Store {
     fn allocate_function(
         &mut self,
         f: Function,
-        module_instance: &ModuleInstance,
+        module_instance: &Rc<ModuleInstance>,
     ) -> Result<usize> {
         let f_address = self.functions.len();
 
@@ -69,7 +71,7 @@ impl Store {
 
         self.functions.push(FunctionInstance::Local {
             function_type,
-            module: Box::new(module_instance.clone()),
+            module: Rc::clone(module_instance),
             code: f,
         });
 
@@ -169,7 +171,7 @@ impl Store {
         initial_global_values: Vec<Value>,
         initial_table_refs: Vec<Ref>,
         element_segment_refs: Vec<Vec<Ref>>,
-    ) -> Result<ModuleInstance> {
+    ) -> Result<Rc<ModuleInstance>> {
         // step 1
         let mut module_instance = ModuleInstance::new(module.types);
 
@@ -246,14 +248,9 @@ impl Store {
         for i in 0..num_funcs {
             module_instance.function_addrs.push(first_func_addr + i);
         }
-        for func in module.functions {
-            self.allocate_function(func, &module_instance)?;
-        }
 
-        // 43: assertion holds bwo construction
-
-        // step 33-34 (after all addrs are populated)
-        for export in module.exports {
+        // step 33-34 (resolve exports before wrapping in Rc so functions share the complete instance)
+        for export in &module.exports {
             let extern_value = match export.description {
                 ExportDescription::Func(x) => ExternalValue::Function {
                     addr: *module_instance
@@ -288,9 +285,17 @@ impl Store {
             };
 
             module_instance.exports.push(ExportInstance {
-                name: export.name,
+                name: export.name.clone(),
                 value: extern_value,
             });
+        }
+
+        // 43: assertion holds bwo construction
+
+        // Wrap in Rc so all FunctionInstances share the same ModuleInstance
+        let module_instance = Rc::new(module_instance);
+        for func in module.functions {
+            self.allocate_function(func, &module_instance)?;
         }
 
         Ok(module_instance)

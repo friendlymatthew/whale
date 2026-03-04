@@ -1,4 +1,5 @@
 use std::fmt::{Debug, Formatter};
+use std::rc::Rc;
 
 use anyhow::{anyhow, bail, ensure, Result};
 use serde::{Deserialize, Serialize};
@@ -75,7 +76,6 @@ pub enum ResultKind {
     Trap,
 }
 
-// todo: is there a better way to store ModuleInstances than cloning?
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModuleInstance {
     pub types: Vec<SubType>,
@@ -114,7 +114,7 @@ impl Default for ModuleInstance {
 pub enum FunctionInstance {
     Local {
         function_type: FunctionType,
-        module: Box<ModuleInstance>,
+        module: Rc<ModuleInstance>,
         code: Function,
     },
     Host {
@@ -173,7 +173,7 @@ impl<'de> Deserialize<'de> for FunctionInstance {
         enum FunctionInstanceData {
             Local {
                 function_type: FunctionType,
-                module: Box<ModuleInstance>,
+                module: ModuleInstance,
                 code: Function,
             },
         }
@@ -185,7 +185,7 @@ impl<'de> Deserialize<'de> for FunctionInstance {
                 code,
             } => Ok(Self::Local {
                 function_type,
-                module,
+                module: Rc::new(module),
                 code,
             }),
         }
@@ -273,11 +273,21 @@ pub struct Label {
     pub arity: u32,
 }
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Frame {
     pub arity: usize,
     pub locals: Vec<Value>,
-    pub module: ModuleInstance,
+    pub module: Rc<ModuleInstance>,
+}
+
+impl Default for Frame {
+    fn default() -> Self {
+        Self {
+            arity: 0,
+            locals: vec![],
+            module: Rc::new(ModuleInstance::default()),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -2,6 +2,7 @@ use anyhow::{anyhow, bail, ensure, Result};
 use serde::{Deserialize, Serialize};
 use std::mem;
 use std::ops::Neg;
+use std::rc::Rc;
 
 use crate::binary_grammar::{
     BlockType, CompositeType, DataMode, DataSegment, ElementMode, ElementSegment,
@@ -59,7 +60,7 @@ struct CallFrame {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Interpreter {
-    module_instances: Vec<ModuleInstance>,
+    module_instances: Vec<Rc<ModuleInstance>>,
     stack: Stack,
     store: Store,
     globals: Vec<Value>,
@@ -166,7 +167,7 @@ impl Interpreter {
 
         // step 16-18
         stack.push(Entry::Activation(Frame {
-            module: module_instance_0.clone(),
+            module: Rc::new(module_instance_0.clone()),
             ..Default::default()
         }));
 
@@ -2208,7 +2209,7 @@ impl Interpreter {
                 let frame = Frame {
                     arity: num_ret_args,
                     locals,
-                    module: *module.clone(),
+                    module: Rc::clone(module),
                 };
 
                 self.stack.push(Entry::Activation(frame.clone()));

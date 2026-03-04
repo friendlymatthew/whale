@@ -10,7 +10,7 @@ license = "MIT"
 anyhow = "1"
 
 # todo: once i get to writing an IR, we're going to get rid of these deps
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 
 [profile.release]
