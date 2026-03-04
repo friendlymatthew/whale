@@ -2,7 +2,7 @@
 
 A WebAssembly interpreter written from scratch.
 
-This project aims to build a fully spec-compliant interpreter whose entire execution state can be serialized, suspended, and restored.
+This project aims to build a fully spec-compliant, performant interpreter whose entire execution state can be serialized, suspended, and restored.
 
 ```rs
 use gabagool::{ExecutionState, Interpreter, Value};
@@ -40,6 +40,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 # Status
+
+`gabagool` is slow. It is not yet optimized and no serious profiling/benchmarking has been done. That said, the goal is to make `gabagool` as performant as a pure interpreter can be. The most interesting direction is a translation phase that lowers WASM instructions into a compact intermediate representation, designed for efficient dispatch and serialization.
 
 `gabagool` is tested against the [WebAssembly spec test suite](https://github.com/WebAssembly/spec/tree/main/test/core).
 
