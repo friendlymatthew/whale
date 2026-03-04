@@ -11,7 +11,7 @@ use crate::execution_grammar::{
 
 use serde::{Deserialize, Serialize};
 
-pub(crate) const PAGE_SIZE: usize = 65536;
+pub const PAGE_SIZE: usize = 65536;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Store {

@@ -675,10 +675,117 @@ impl Interpreter {
                     );
                     self.push_function_call(*func_addr)?;
                 }
-                Instruction::ReturnCall(_) => todo!(),
-                Instruction::ReturnCallIndirect(_, _) => todo!(),
-                Instruction::CallRef(_) => todo!(),
-                Instruction::ReturnCallRef(_) => todo!(),
+                Instruction::ReturnCall(x) => {
+                    let a = self.call_stack[depth].frame.module.function_addrs[x as usize];
+
+                    let n = match &self.store.functions[a] {
+                        FunctionInstance::Local { function_type, .. } => function_type.0 .0.len(),
+                        FunctionInstance::Host { function_type, .. } => function_type.0 .0.len(),
+                    };
+
+                    let args = self.stack.pop_n(n)?;
+
+                    loop {
+                        match self.stack.pop()? {
+                            Entry::Activation(_) => break,
+                            _ => continue,
+                        }
+                    }
+
+                    self.stack.extend(args);
+                    self.call_stack[depth].control_stack.clear();
+                    self.call_stack.pop();
+
+                    self.push_function_call(a)?;
+                }
+                Instruction::ReturnCallIndirect(type_idx, table_idx) => {
+                    let frame_module = &self.call_stack[depth].frame.module;
+                    let table_addr = frame_module.table_addrs[table_idx as usize];
+                    let table = &self.store.tables[table_addr];
+                    let addr_type = table.table_type.addr_type;
+
+                    let i = self.stack.pop_address(addr_type)?;
+
+                    let elem = table
+                        .elem
+                        .get(i)
+                        .ok_or_else(|| anyhow!("trap: undefined element"))?;
+
+                    let Ref::FunctionAddr(func_addr) = elem else {
+                        bail!("trap: uninitialized element {}", i)
+                    };
+                    let expected_type = match &frame_module
+                        .types
+                        .get(type_idx as usize)
+                        .ok_or_else(|| anyhow!("type index {} out of bounds", type_idx))?
+                        .composite_type
+                    {
+                        CompositeType::Func(ft) => ft,
+                        _ => bail!("type index {} is not a function type", type_idx),
+                    };
+                    let actual_type = match &self.store.functions[*func_addr] {
+                        FunctionInstance::Local { function_type, .. } => function_type,
+                        FunctionInstance::Host { function_type, .. } => function_type,
+                    };
+                    ensure!(
+                        expected_type.0 .0.len() == actual_type.0 .0.len()
+                            && expected_type.1 .0.len() == actual_type.1 .0.len(),
+                        "trap: indirect call type mismatch"
+                    );
+
+                    let func_addr = *func_addr;
+                    let n = expected_type.0 .0.len();
+                    let args = self.stack.pop_n(n)?;
+
+                    loop {
+                        match self.stack.pop()? {
+                            Entry::Activation(_) => break,
+                            _ => continue,
+                        }
+                    }
+
+                    self.stack.extend(args);
+                    self.call_stack[depth].control_stack.clear();
+                    self.call_stack.pop();
+
+                    self.push_function_call(func_addr)?;
+                }
+                Instruction::CallRef(_) => {
+                    let func_ref = match self.stack.pop_value()? {
+                        Value::Ref(Ref::Null) => bail!("trap: null functionr ref"),
+                        Value::Ref(Ref::FunctionAddr(f)) => f,
+                        _ => bail!("expected function or null ref"),
+                    };
+
+                    self.push_function_call(func_ref)?;
+                }
+                Instruction::ReturnCallRef(_) => {
+                    let func_addr = match self.stack.pop_value()? {
+                        Value::Ref(Ref::Null) => bail!("trap: null function ref"),
+                        Value::Ref(Ref::FunctionAddr(f)) => f,
+                        _ => bail!("expected function or null ref"),
+                    };
+
+                    let n = match &self.store.functions[func_addr] {
+                        FunctionInstance::Local { function_type, .. } => function_type.0 .0.len(),
+                        FunctionInstance::Host { function_type, .. } => function_type.0 .0.len(),
+                    };
+
+                    let args = self.stack.pop_n(n)?;
+
+                    loop {
+                        match self.stack.pop()? {
+                            Entry::Activation(_) => break,
+                            _ => continue,
+                        }
+                    }
+
+                    self.stack.extend(args);
+                    self.call_stack[depth].control_stack.clear();
+                    self.call_stack.pop();
+
+                    self.push_function_call(func_addr)?;
+                }
                 Instruction::TryTable(_, _, _) => todo!(),
                 Instruction::BrOnNull(_) => todo!(),
                 Instruction::BrOnNonNull(_) => todo!(),
