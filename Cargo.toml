@@ -1,13 +1,15 @@
 [package]
 name = "gabagool"
 version = "0.1.0"
-description = "a WASM interpreter"
+description = "a snapshotable WASM interpreter"
 edition = "2021"
 authors = ["friendlymatthew"]
 license = "MIT"
 
 [dependencies]
 anyhow = "1"
+
+# todo: once i get to writing an IR, we're going to get rid of these deps
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

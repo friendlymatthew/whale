@@ -1,2 +1,3 @@
-/target
+target/
 /tests/spec/
+game-of-life*.gabagool
