@@ -5,4 +5,5 @@ edition = "2021"
 
 [dependencies]
 gabagool = { path = "../.." }
-minifb = "0.27"
+softbuffer = "0.4"
+winit = "0.30"

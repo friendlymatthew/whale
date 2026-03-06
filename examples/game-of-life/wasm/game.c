@@ -50,6 +50,17 @@ void set_cell(int x, int y, int alive) {
     grid[y * SIZE + x] = alive ? 1 : 0;
 }
 
+void place_block(int cx, int cy) {
+    unsigned char *grid = current_is_a ? grid_a : grid_b;
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            int x = mod(cx + dx, SIZE);
+            int y = mod(cy + dy, SIZE);
+            grid[y * SIZE + x] = 1;
+        }
+    }
+}
+
 void init(void) {
     for (int i = 0; i < TOTAL; i++) {
         grid_a[i] = 0;
@@ -130,6 +141,17 @@ void set_palette(int idx) {
     current_palette = idx % NUM_PALETTES;
 }
 
+int cycle_palette(void) {
+    current_palette = (current_palette + 1) % NUM_PALETTES;
+    render();
+    return current_palette;
+}
+
 int get_palette(void) {
     return current_palette;
+}
+
+void step(void) {
+    tick();
+    render();
 }
