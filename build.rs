@@ -111,52 +111,52 @@ mod spec_tests {
                         let steps = &mut modules.last_mut().unwrap().1;
                         let step_idx = steps.len();
                         steps.push(format!(
-                            "    spec_step_assert_return(&mut interp, \"{}\", &[{}], &[{}], {}, &mut failures);",
+                            "    spec_step_assert_return(&mut store, instance, \"{}\", &[{}], &[{}], {}, &mut failures);",
                             invoke.name, args_code, expected_code, step_idx
                         ));
                     }
 
-                    WastDirective::AssertTrap { exec, .. } => {
-                        match exec {
-                            WastExecute::Invoke(ref invoke) => {
-                                if module_idx < 0 {
-                                    continue;
-                                }
-                                if invoke.module.is_some() {
-                                    continue;
-                                }
+                    WastDirective::AssertTrap { exec, .. } => match exec {
+                        WastExecute::Invoke(ref invoke) => {
+                            if module_idx < 0 {
+                                continue;
+                            }
+                            if invoke.module.is_some() {
+                                continue;
+                            }
 
-                                let Some(args_code) = render_args(&invoke.args) else {
-                                    continue;
-                                };
+                            let Some(args_code) = render_args(&invoke.args) else {
+                                continue;
+                            };
 
-                                let steps = &mut modules.last_mut().unwrap().1;
-                                let step_idx = steps.len();
-                                steps.push(format!(
-                                    "    spec_step_assert_trap(&mut interp, \"{}\", &[{}], {}, &mut failures);",
+                            let steps = &mut modules.last_mut().unwrap().1;
+                            let step_idx = steps.len();
+                            steps.push(format!(
+                                    "    spec_step_assert_trap(&mut store, instance, \"{}\", &[{}], {}, &mut failures);",
                                     invoke.name, args_code, step_idx
                                 ));
-                            }
-                            WastExecute::Wat(mut wat) => {
-                                let Ok(bytes) = wat.encode() else {
-                                    trap_module_idx += 1;
-                                    continue;
-                                };
-                                let wasm_path = wasm_dir.join(format!(
-                                    "trap_module_{}_{}.wasm",
-                                    safe_name, trap_module_idx
-                                ));
-                                fs::write(&wasm_path, bytes).unwrap();
-                                let test_name =
-                                    format!("trap_module_{}_{}", safe_name, trap_module_idx);
-                                all_tests.push_str(&format!(
+                        }
+                        WastExecute::Wat(mut wat) => {
+                            let Ok(bytes) = wat.encode() else {
+                                trap_module_idx += 1;
+                                continue;
+                            };
+                            let wasm_path = wasm_dir.join(format!(
+                                "trap_module_{}_{}.wasm",
+                                safe_name, trap_module_idx
+                            ));
+                            fs::write(&wasm_path, bytes).unwrap();
+                            let test_name =
+                                format!("trap_module_{}_{}", safe_name, trap_module_idx);
+                            all_tests.push_str(&format!(
                                     concat!(
                                         "#[test]\n",
                                         "fn {test_name}() {{\n",
                                         "    let wasm_bytes: &[u8] = include_bytes!(concat!(env!(\"OUT_DIR\"), \"/wasm/trap_module_{file}_{idx}.wasm\"));\n",
+                                        "    let module = Module::new(wasm_bytes).unwrap();\n",
                                         "    let mut store = Store::new();\n",
-                                        "    let imports = setup_spectest_imports(&mut store, wasm_bytes);\n",
-                                        "    let result = CompiledInterpreter::instantiate(store, wasm_bytes, imports);\n",
+                                        "    let imports = setup_spectest_imports(&mut store, &module);\n",
+                                        "    let result = store.instantiate(&module, imports);\n",
                                         "    assert!(result.is_err(), \"expected module instantiation to trap, but it succeeded\");\n",
                                         "}}\n",
                                     ),
@@ -164,13 +164,14 @@ mod spec_tests {
                                     file = safe_name,
                                     idx = trap_module_idx,
                                 ));
-                                trap_module_idx += 1;
-                            }
-                            _ => {}
+                            trap_module_idx += 1;
                         }
-                    }
+                        _ => {}
+                    },
 
-                    WastDirective::AssertExhaustion { call: ref invoke, .. } => {
+                    WastDirective::AssertExhaustion {
+                        call: ref invoke, ..
+                    } => {
                         if module_idx < 0 {
                             continue;
                         }
@@ -185,7 +186,7 @@ mod spec_tests {
                         let steps = &mut modules.last_mut().unwrap().1;
                         let step_idx = steps.len();
                         steps.push(format!(
-                            "    spec_step_assert_trap(&mut interp, \"{}\", &[{}], {}, &mut failures);",
+                            "    spec_step_assert_trap(&mut store, instance, \"{}\", &[{}], {}, &mut failures);",
                             invoke.name, args_code, step_idx
                         ));
                     }
@@ -204,7 +205,7 @@ mod spec_tests {
 
                         let steps = &mut modules.last_mut().unwrap().1;
                         steps.push(format!(
-                            "    spec_step_invoke(&mut interp, \"{}\", &[{}]);",
+                            "    spec_step_invoke(&mut store, instance, \"{}\", &[{}]);",
                             invoke.name, args_code
                         ));
                     }
@@ -214,13 +215,10 @@ mod spec_tests {
                             malformed_idx += 1;
                             continue;
                         };
-                        let wasm_path = wasm_dir.join(format!(
-                            "malformed_{}_{}.wasm",
-                            safe_name, malformed_idx
-                        ));
+                        let wasm_path = wasm_dir
+                            .join(format!("malformed_{}_{}.wasm", safe_name, malformed_idx));
                         fs::write(&wasm_path, bytes).unwrap();
-                        let test_name =
-                            format!("malformed_{}_{}", safe_name, malformed_idx);
+                        let test_name = format!("malformed_{}_{}", safe_name, malformed_idx);
                         all_tests.push_str(&format!(
                             concat!(
                                 "#[test]\n",
@@ -242,21 +240,19 @@ mod spec_tests {
                             unlinkable_idx += 1;
                             continue;
                         };
-                        let wasm_path = wasm_dir.join(format!(
-                            "unlinkable_{}_{}.wasm",
-                            safe_name, unlinkable_idx
-                        ));
+                        let wasm_path = wasm_dir
+                            .join(format!("unlinkable_{}_{}.wasm", safe_name, unlinkable_idx));
                         fs::write(&wasm_path, bytes).unwrap();
-                        let test_name =
-                            format!("unlinkable_{}_{}", safe_name, unlinkable_idx);
+                        let test_name = format!("unlinkable_{}_{}", safe_name, unlinkable_idx);
                         all_tests.push_str(&format!(
                             concat!(
                                 "#[test]\n",
                                 "fn {test_name}() {{\n",
                                 "    let wasm_bytes: &[u8] = include_bytes!(concat!(env!(\"OUT_DIR\"), \"/wasm/unlinkable_{file}_{idx}.wasm\"));\n",
+                                "    let module = Module::new(wasm_bytes).unwrap();\n",
                                 "    let mut store = Store::new();\n",
-                                "    let imports = setup_spectest_imports(&mut store, wasm_bytes);\n",
-                                "    let result = CompiledInterpreter::instantiate(store, wasm_bytes, imports);\n",
+                                "    let imports = setup_spectest_imports(&mut store, &module);\n",
+                                "    let result = store.instantiate(&module, imports);\n",
                                 "    assert!(result.is_err(), \"expected unlinkable module to fail instantiation, but it succeeded\");\n",
                                 "}}\n",
                             ),
@@ -313,10 +309,10 @@ mod spec_tests {
                         setup.push_str(&format!(
                             concat!(
                                 "    let prereq_wasm_{pidx}: &[u8] = include_bytes!(concat!(env!(\"OUT_DIR\"), \"/wasm/{file}_{pidx}.wasm\"));\n",
-                                "    let prereq_imports_{pidx} = setup_spectest_imports(&mut store, prereq_wasm_{pidx});\n",
-                                "    let prereq_interp_{pidx} = CompiledInterpreter::instantiate(store, prereq_wasm_{pidx}, prereq_imports_{pidx}).unwrap();\n",
-                                "    let prereq_exports_{pidx}: Vec<ExportInstance> = prereq_interp_{pidx}.module_exports().to_vec();\n",
-                                "    store = prereq_interp_{pidx}.into_store();\n",
+                                "    let prereq_module_{pidx} = Module::new(prereq_wasm_{pidx}).unwrap();\n",
+                                "    let prereq_imports_{pidx} = setup_spectest_imports(&mut store, &prereq_module_{pidx});\n",
+                                "    let prereq_instance_{pidx} = store.instantiate(&prereq_module_{pidx}, prereq_imports_{pidx}).unwrap();\n",
+                                "    let prereq_exports_{pidx}: Vec<ExportInstance> = store.exports(prereq_instance_{pidx}).to_vec();\n",
                             ),
                             pidx = pidx,
                             file = safe_name,
@@ -324,25 +320,19 @@ mod spec_tests {
                     }
 
                     // Build the registered_exports vec
-                    setup.push_str("    let registered_exports: Vec<(&str, &[ExportInstance])> = vec![");
+                    setup.push_str(
+                        "    let registered_exports: Vec<(&str, &[ExportInstance])> = vec![",
+                    );
                     for (name, dep_idx) in deps {
-                        setup.push_str(&format!(
-                            "(\"{}\", &prereq_exports_{}), ",
-                            name, dep_idx
-                        ));
+                        setup.push_str(&format!("(\"{}\", &prereq_exports_{}), ", name, dep_idx));
                     }
                     setup.push_str("];\n");
 
                     // Resolve imports using registered modules
-                    setup.push_str(&format!(
-                        concat!(
-                            "    let imports = resolve_imports_with_registered(&mut store, wasm_bytes, &registered_exports);\n",
-                        ),
-                    ));
+                    setup.push_str("    let imports = resolve_imports_with_registered(&mut store, &module, &registered_exports);\n");
                     setup
                 } else {
-                    "    let imports = setup_spectest_imports(&mut store, wasm_bytes);\n"
-                        .to_string()
+                    "    let imports = setup_spectest_imports(&mut store, &module);\n".to_string()
                 };
 
                 all_tests.push_str(&format!(
@@ -350,9 +340,10 @@ mod spec_tests {
                         "#[test]\n",
                         "fn {test_name}() {{\n",
                         "    let wasm_bytes: &[u8] = include_bytes!(concat!(env!(\"OUT_DIR\"), \"/wasm/{file}_{midx}.wasm\"));\n",
+                        "    let module = Module::new(wasm_bytes).unwrap();\n",
                         "    let mut store = Store::new();\n",
                         "{setup}",
-                        "    let mut interp = CompiledInterpreter::instantiate(store, wasm_bytes, imports).unwrap();\n",
+                        "    let instance = store.instantiate(&module, imports).unwrap();\n",
                         "    let mut failures: Vec<String> = Vec::new();\n",
                         "{steps}\n",
                         "    if !failures.is_empty() {{\n",
@@ -366,7 +357,6 @@ mod spec_tests {
                     setup = setup_code,
                     steps = steps_code,
                 ));
-
             }
         }
 
@@ -412,12 +402,14 @@ mod spec_tests {
                 WastArg::Core(WastArgCore::RefNull(_)) => {
                     Some("RawValue::from_ref(Ref::Null)".to_string())
                 }
-                WastArg::Core(WastArgCore::RefExtern(n)) => {
-                    Some(format!("RawValue::from_ref(Ref::RefExtern({} as usize))", n))
-                }
-                WastArg::Core(WastArgCore::RefHost(n)) => {
-                    Some(format!("RawValue::from_ref(Ref::RefExtern({} as usize))", n))
-                }
+                WastArg::Core(WastArgCore::RefExtern(n)) => Some(format!(
+                    "RawValue::from_ref(Ref::RefExtern({} as usize))",
+                    n
+                )),
+                WastArg::Core(WastArgCore::RefHost(n)) => Some(format!(
+                    "RawValue::from_ref(Ref::RefExtern({} as usize))",
+                    n
+                )),
                 _ => None,
             })
             .collect();
@@ -459,24 +451,26 @@ mod spec_tests {
                 WastRet::Core(WastRetCore::RefNull(_)) => {
                     Some("ExpectedValue::Ref(ExpectedRef::Null)".to_string())
                 }
-                WastRet::Core(WastRetCore::RefExtern(Some(n))) => {
-                    Some(format!("ExpectedValue::Ref(ExpectedRef::Extern(Some({})))", n))
-                }
+                WastRet::Core(WastRetCore::RefExtern(Some(n))) => Some(format!(
+                    "ExpectedValue::Ref(ExpectedRef::Extern(Some({})))",
+                    n
+                )),
                 WastRet::Core(WastRetCore::RefExtern(None)) => {
                     Some("ExpectedValue::Ref(ExpectedRef::Extern(None))".to_string())
                 }
-                WastRet::Core(WastRetCore::RefHost(n)) => {
-                    Some(format!("ExpectedValue::Ref(ExpectedRef::Extern(Some({})))", n))
-                }
+                WastRet::Core(WastRetCore::RefHost(n)) => Some(format!(
+                    "ExpectedValue::Ref(ExpectedRef::Extern(Some({})))",
+                    n
+                )),
                 WastRet::Core(WastRetCore::RefFunc(_)) => {
                     Some("ExpectedValue::Ref(ExpectedRef::Func)".to_string())
                 }
-                WastRet::Core(WastRetCore::RefAny
+                WastRet::Core(
+                    WastRetCore::RefAny
                     | WastRetCore::RefEq
                     | WastRetCore::RefStruct
-                    | WastRetCore::RefArray) => {
-                    Some("ExpectedValue::Ref(ExpectedRef::NonNull)".to_string())
-                }
+                    | WastRetCore::RefArray,
+                ) => Some("ExpectedValue::Ref(ExpectedRef::NonNull)".to_string()),
                 WastRet::Core(WastRetCore::RefI31 | WastRetCore::RefI31Shared) => {
                     Some("ExpectedValue::Ref(ExpectedRef::I31)".to_string())
                 }

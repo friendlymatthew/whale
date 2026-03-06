@@ -30,7 +30,7 @@ impl ValueStack {
 
     pub fn push_v128(&mut self, v: i128) {
         let (hi, lo) = RawValue::from_v128(v);
-        self.extend_from_slice(&[hi, lo]);
+        self.extend_from_slice(&<[RawValue; 2]>::from((hi, lo)));
     }
 
     pub fn pop(&mut self) -> RawValue {
@@ -50,7 +50,11 @@ impl ValueStack {
         self.cursor == 0
     }
 
-    pub fn clear(&mut self) {
+    pub fn capacity(&self) -> usize {
+        self.inner.len()
+    }
+
+    pub const fn clear(&mut self) {
         self.cursor = 0;
     }
 
@@ -65,7 +69,7 @@ impl ValueStack {
         self.cursor += slice.len();
     }
 
-    pub fn truncate(&mut self, len: usize) {
+    pub const fn truncate(&mut self, len: usize) {
         self.cursor = len;
     }
 

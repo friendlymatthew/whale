@@ -1,9 +1,7 @@
 use std::fmt::{Debug, Formatter};
 use std::rc::Rc;
 
-use crate::binary_grammar::{
-    Function, FunctionType, GlobalType, MemoryType, RefType, SubType, TableType,
-};
+use crate::binary_grammar::{Function, FunctionType, GlobalType, MemoryType, RefType, TableType};
 
 #[repr(u8)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -94,9 +92,9 @@ impl From<f64> for RawValue {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct ModuleInstance {
-    pub types: Vec<SubType>,
+/// A temporary struct that accumulates address mappings during instantiation
+#[derive(Debug, Clone, Default)]
+pub struct AddressMap {
     pub function_addrs: Vec<usize>,
     pub table_addrs: Vec<usize>,
     pub mem_addrs: Vec<usize>,
@@ -107,32 +105,10 @@ pub struct ModuleInstance {
     pub exports: Vec<ExportInstance>,
 }
 
-impl ModuleInstance {
-    pub const fn new(types: Vec<SubType>) -> Self {
-        Self {
-            types,
-            function_addrs: vec![],
-            table_addrs: vec![],
-            mem_addrs: vec![],
-            global_addrs: vec![],
-            tag_addrs: vec![],
-            elem_addrs: vec![],
-            data_addrs: vec![],
-            exports: vec![],
-        }
-    }
-}
-
-impl Default for ModuleInstance {
-    fn default() -> Self {
-        Self::new(vec![])
-    }
-}
-
 pub enum FunctionInstance {
     Local {
         function_type: FunctionType,
-        module: Rc<ModuleInstance>,
+        address_map: Rc<AddressMap>,
         code: Function,
     },
     Host {
@@ -146,12 +122,12 @@ impl Debug for FunctionInstance {
         match self {
             Self::Local {
                 function_type,
-                module,
+                address_map,
                 code,
             } => f
                 .debug_struct("FunctionInstance Local")
                 .field("function_type: {}", function_type)
-                .field("module: {}", module)
+                .field("address: {}", address_map)
                 .field("code: {}", code)
                 .finish(),
             Self::Host { function_type, .. } => f

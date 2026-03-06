@@ -1,4 +1,4 @@
-use gabagool::{CompiledInterpreter, RawValue, ValueType};
+use gabagool::{Module, RawValue, Store, ValueType};
 use std::fs;
 use std::path::PathBuf;
 use std::process;
@@ -16,25 +16,30 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let wasm_file = args
         .next()
         .ok_or("usage: gabagool <file.wasm> <func_name> [args...]")?;
+
     let func_name = args
         .next()
         .ok_or("usage: gabagool <file.wasm> <func_name> [args...]")?;
-    let cli_args: Vec<String> = args.collect();
 
     let wasm_file = PathBuf::from(&wasm_file);
     let wasm_bytes = fs::read(&wasm_file)?;
 
-    let mut interpreter = CompiledInterpreter::new(&wasm_bytes)?;
+    let module = Module::new(&wasm_bytes)?;
+    let mut store = Store::new();
+    let instance = store.instantiate(&module, vec![])?;
 
-    let param_types = interpreter.get_param_types(&func_name)?;
+    let param_types = store.get_param_types(instance, &func_name)?;
 
     let values = param_types
         .iter()
-        .zip(&cli_args)
-        .map(|(vt, arg)| parse_value(vt, arg))
+        .zip(args)
+        .map(|(vt, arg)| parse_value(vt, &arg))
         .collect::<Result<Vec<_>, _>>()?;
 
-    let results = interpreter.invoke(&func_name, values)?.into_completed()?;
+    let results = store
+        .invoke(instance, &func_name, values)?
+        .into_completed()?;
+
     println!("{:?}", results);
 
     Ok(())

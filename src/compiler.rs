@@ -1,7 +1,7 @@
 use crate::binary_grammar::{
-    BlockType, CompositeType, Function, Instruction, Module, SubType, ValueType,
+    BlockType, CompositeType, Function, Instruction, ParsedModule, SubType, ValueType,
 };
-use crate::ir::{CompiledFunction, CompiledModule, JumpTableEntry, Op};
+use crate::ir::{CompiledFunction, JumpTableEntry, Op};
 
 const UNREACHABLE_DEPTH: i32 = i32::MIN;
 
@@ -22,6 +22,16 @@ struct BlockContext {
     pending_patches: Vec<usize>,
 }
 
+/// Compiled IR and constant tables for a parsed Wasm module
+#[derive(Debug, Clone)]
+pub struct ModuleCode {
+    pub(crate) compiled_funcs: Vec<CompiledFunction>,
+    pub(crate) types: Vec<SubType>,
+    pub(crate) v128_constants: Vec<i128>,
+    pub(crate) jump_tables: Vec<Vec<JumpTableEntry>>,
+    pub(crate) shuffle_masks: Vec<[u8; 16]>,
+}
+
 struct Compiler<'a> {
     types: &'a [SubType],
     func_signatures: Vec<(usize, usize)>,
@@ -34,7 +44,7 @@ struct Compiler<'a> {
     shuffle_masks: Vec<[u8; 16]>,
 }
 
-pub fn compile(module: &Module) -> CompiledModule {
+pub fn compile(module: &ParsedModule) -> ModuleCode {
     let mut v128_constants = Vec::new();
     let mut jump_tables = Vec::new();
     let mut shuffle_masks = Vec::new();
@@ -83,27 +93,19 @@ pub fn compile(module: &Module) -> CompiledModule {
         })
         .collect();
 
-    CompiledModule {
-        functions,
+    ModuleCode {
+        compiled_funcs: functions,
         types: module.types.clone(),
-        function_addrs: Vec::new(),
-        table_addrs: Vec::new(),
-        mem_addrs: Vec::new(),
-        global_addrs: Vec::new(),
-        tag_addrs: Vec::new(),
-        elem_addrs: Vec::new(),
-        data_addrs: Vec::new(),
-        exports: Vec::new(),
         v128_constants,
         jump_tables,
         shuffle_masks,
     }
 }
 
-pub fn compile_function_into(
+pub fn compile_function_into_code(
     types: &[SubType],
     func: &Function,
-    module: &mut CompiledModule,
+    code: &mut ModuleCode,
 ) -> CompiledFunction {
     let mut compiler = Compiler {
         types,
@@ -111,15 +113,15 @@ pub fn compile_function_into(
         ops: Vec::new(),
         block_stack: Vec::new(),
         stack_height: 0,
-        v128_constants: std::mem::take(&mut module.v128_constants),
-        jump_tables: std::mem::take(&mut module.jump_tables),
-        shuffle_masks: std::mem::take(&mut module.shuffle_masks),
+        v128_constants: std::mem::take(&mut code.v128_constants),
+        jump_tables: std::mem::take(&mut code.jump_tables),
+        shuffle_masks: std::mem::take(&mut code.shuffle_masks),
         max_stack_height: 0,
     };
     let cf = compiler.compile_function(func);
-    module.v128_constants = compiler.v128_constants;
-    module.jump_tables = compiler.jump_tables;
-    module.shuffle_masks = compiler.shuffle_masks;
+    code.v128_constants = compiler.v128_constants;
+    code.jump_tables = compiler.jump_tables;
+    code.shuffle_masks = compiler.shuffle_masks;
     cf
 }
 

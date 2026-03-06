@@ -6,7 +6,6 @@ edition = "2021"
 authors = ["friendlymatthew"]
 license = "MIT"
 
-
 [profile.release]
 debug = 1
 panic = "abort"

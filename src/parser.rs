@@ -9,7 +9,7 @@ use crate::binary_grammar::{
     DataMode, DataSection, DataSegment, ElementMode, ElementSection, ElementSegment, Export,
     ExportDescription, ExportSection, FieldType, Function, FunctionSection, FunctionType, Global,
     GlobalSection, GlobalType, HeapType, ImportDeclaration, ImportDescription, ImportSection,
-    Instruction, Limit, Local, MemArg, MemorySection, MemoryType, Module, Mutability, RefType,
+    Instruction, Limit, Local, MemArg, MemorySection, MemoryType, Mutability, ParsedModule, RefType,
     ResultType, Section, StorageType, StructType, SubType, TableDef, TableSection, TableType, Tag,
     TagSection, TypeSection, ValueType, MAGIC_NUMBER, TERM_ELSE_BYTE, TERM_END_BYTE,
 };
@@ -32,8 +32,8 @@ impl<'a> Parser<'a> {
     }
 
     /// Parses a .wasm file in its entirety.
-    pub fn parse_module(&mut self) -> Result<Module> {
-        let mut module = Module::new(self.parse_preamble()?);
+    pub fn parse_module(&mut self) -> Result<ParsedModule> {
+        let mut module = ParsedModule::new(self.parse_preamble()?);
         let mut data_count: Option<u32> = None;
 
         while self.cursor < self.buffer.len() {

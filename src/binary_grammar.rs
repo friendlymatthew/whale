@@ -1,4 +1,3 @@
-/// The 4-byte preamble that starts at the top of the encoded module.
 pub const MAGIC_NUMBER: [u8; 4] = *b"\0asm";
 
 pub mod section_id {
@@ -18,8 +17,8 @@ pub mod section_id {
     pub const TAG_ID: u8 = 13;
 }
 
-#[derive(Debug)]
-pub struct Module {
+#[derive(Debug, Clone)]
+pub struct ParsedModule {
     pub version: u8,
     pub types: Vec<SubType>,
     pub functions: Vec<Function>,
@@ -35,7 +34,7 @@ pub struct Module {
     pub customs: Vec<CustomSection>,
 }
 
-impl Module {
+impl ParsedModule {
     pub const fn new(version: u8) -> Self {
         Self {
             version,
@@ -55,7 +54,7 @@ impl Module {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Section {
     Custom(CustomSection),
     Type(TypeSection),
@@ -125,7 +124,7 @@ pub struct Limit {
     pub max: u64,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MemoryType {
     pub addr_type: AddrType,
     pub limit: Limit,
@@ -187,18 +186,18 @@ pub struct GlobalType {
     pub mutability: Mutability,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CustomSection {
     pub name: String,
     pub bytes: Vec<u8>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TypeSection {
     pub types: Vec<SubType>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ImportDescription {
     Func(u32),
     Table(TableType),
@@ -207,46 +206,46 @@ pub enum ImportDescription {
     Tag(u32),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ImportDeclaration {
     pub module: String,
     pub name: String,
     pub description: ImportDescription,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ImportSection {
     pub import_declarations: Vec<ImportDeclaration>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FunctionSection {
     pub indices: Vec<u32>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TableDef {
     pub table_type: TableType,
     pub init: Vec<Instruction>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TableSection {
     pub tables: Vec<TableDef>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MemorySection {
     pub memories: Vec<MemoryType>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Global {
     pub global_type: GlobalType,
     pub initial_expression: Vec<Instruction>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct GlobalSection {
     pub globals: Vec<Global>,
 }
@@ -256,7 +255,7 @@ pub struct Tag {
     pub type_index: u32,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TagSection {
     pub tags: Vec<Tag>,
 }
@@ -788,7 +787,7 @@ pub enum Instruction {
     I32x4RelaxedDotI8x16I7x16AddSigned,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ExportDescription {
     Func(u32),
     Table(u32),
@@ -797,18 +796,18 @@ pub enum ExportDescription {
     Tag(u32),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Export {
     pub name: String,
     pub description: ExportDescription,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ExportSection {
     pub exports: Vec<Export>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ElementMode {
     Passive,
     Active {
@@ -818,37 +817,37 @@ pub enum ElementMode {
     Declarative,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ElementSegment {
     pub ref_type: RefType,
     pub expression: Vec<Vec<Instruction>>,
     pub mode: ElementMode,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ElementSection {
     pub elements: Vec<ElementSegment>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Local {
     pub count: u32,
     pub value_type: ValueType,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Function {
     pub type_index: u32,
     pub locals: Vec<Local>,
     pub body: Vec<Instruction>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CodeSection {
     pub codes: Vec<Function>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum DataMode {
     Active {
         memory: u32,
@@ -857,13 +856,13 @@ pub enum DataMode {
     Passive,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DataSegment {
     pub bytes: Vec<u8>,
     pub mode: DataMode,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DataSection {
     pub data_segments: Vec<DataSegment>,
 }

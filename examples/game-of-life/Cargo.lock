@@ -188,15 +188,11 @@ dependencies = [
 [[package]]
 name = "gabagool"
 version = "0.1.0"
-dependencies = [
- "anyhow",
-]
 
 [[package]]
 name = "game-of-life"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "gabagool",
  "minifb",
 ]

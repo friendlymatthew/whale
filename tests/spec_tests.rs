@@ -1,7 +1,7 @@
 use gabagool::{
-    parser::Parser, AddrType, CompositeType, CompiledInterpreter, ExportInstance, ExternalValue,
-    FunctionInstance, GlobalInstance, GlobalType, ImportDescription, Limit,
-    MemoryInstance, MemoryType, RawValue, Ref, Store, ValueType,
+    parser::Parser, AddrType, CompositeType, ExportInstance, ExternalValue,
+    FunctionInstance, GlobalInstance, GlobalType, ImportDescription, Instance, Limit,
+    MemoryInstance, MemoryType, Module, RawValue, Ref, Store, ValueType,
 };
 
 #[derive(Debug)]
@@ -44,10 +44,9 @@ fn create_spectest_memory(store: &mut Store, mt: &MemoryType) -> ExternalValue {
     ExternalValue::Memory { addr }
 }
 
-fn setup_spectest_imports(store: &mut Store, wasm_bytes: &[u8]) -> Vec<ExternalValue> {
-    let module = Parser::new(wasm_bytes).parse_module().unwrap();
+fn setup_spectest_imports(store: &mut Store, module: &Module) -> Vec<ExternalValue> {
     module
-        .import_declarations
+        .import_declarations()
         .iter()
         .map(|import| match &import.description {
             ImportDescription::Global(gt) => {
@@ -83,7 +82,7 @@ fn setup_spectest_imports(store: &mut Store, wasm_bytes: &[u8]) -> Vec<ExternalV
             }
             ImportDescription::Func(type_idx) => {
                 let addr = store.functions.len();
-                let function_type = match &module.types[*type_idx as usize].composite_type {
+                let function_type = match &module.types()[*type_idx as usize].composite_type {
                     CompositeType::Func(ft) => ft.clone(),
                     _ => panic!("expected function type at index {}", type_idx),
                 };
@@ -102,15 +101,16 @@ fn setup_spectest_imports(store: &mut Store, wasm_bytes: &[u8]) -> Vec<ExternalV
 }
 
 fn spec_step_assert_return(
-    interp: &mut CompiledInterpreter,
+    store: &mut Store,
+    instance: Instance,
     name: &str,
     args: &[RawValue],
     expected: &[ExpectedValue],
     step: usize,
     failures: &mut Vec<String>,
 ) {
-    match interp
-        .invoke(name, args.to_vec())
+    match store
+        .invoke(instance, name, args.to_vec())
         .and_then(|s| s.into_completed())
     {
         Ok(actual) => {
@@ -131,14 +131,15 @@ fn spec_step_assert_return(
 }
 
 fn spec_step_assert_trap(
-    interp: &mut CompiledInterpreter,
+    store: &mut Store,
+    instance: Instance,
     name: &str,
     args: &[RawValue],
     step: usize,
     failures: &mut Vec<String>,
 ) {
-    if let Ok(results) = interp
-        .invoke(name, args.to_vec())
+    if let Ok(results) = store
+        .invoke(instance, name, args.to_vec())
         .and_then(|s| s.into_completed())
     {
         failures.push(format!(
@@ -148,8 +149,8 @@ fn spec_step_assert_trap(
     }
 }
 
-fn spec_step_invoke(interp: &mut CompiledInterpreter, name: &str, args: &[RawValue]) {
-    let _ = interp.invoke(name, args.to_vec());
+fn spec_step_invoke(store: &mut Store, instance: Instance, name: &str, args: &[RawValue]) {
+    let _ = store.invoke(instance, name, args.to_vec());
 }
 
 fn values_match(expected: &[ExpectedValue], actual: &[RawValue]) -> bool {
@@ -196,12 +197,11 @@ fn values_match(expected: &[ExpectedValue], actual: &[RawValue]) -> bool {
 
 fn resolve_imports_with_registered(
     store: &mut Store,
-    wasm_bytes: &[u8],
+    module: &Module,
     registered_exports: &[(&str, &[ExportInstance])],
 ) -> Vec<ExternalValue> {
-    let module = Parser::new(wasm_bytes).parse_module().unwrap();
     module
-        .import_declarations
+        .import_declarations()
         .iter()
         .map(|import| {
             // Try to find the import in registered modules
@@ -249,7 +249,7 @@ fn resolve_imports_with_registered(
                 }
                 ImportDescription::Func(type_idx) => {
                     let addr = store.functions.len();
-                    let function_type = match &module.types[*type_idx as usize].composite_type {
+                    let function_type = match &module.types()[*type_idx as usize].composite_type {
                         CompositeType::Func(ft) => ft.clone(),
                         _ => panic!("expected function type at index {}", type_idx),
                     };

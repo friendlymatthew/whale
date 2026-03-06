@@ -1,5 +1,4 @@
-use crate::binary_grammar::{HeapType, SubType, ValueType};
-use crate::execution_grammar::ExportInstance;
+use crate::binary_grammar::{HeapType, ValueType};
 
 const _: () = assert!(std::mem::size_of::<Op>() <= 16);
 
@@ -18,24 +17,6 @@ pub struct CompiledFunction {
     // contains [args; num_args] [...local_types]
     pub local_types: Vec<ValueType>,
     pub(crate) max_stack_height: u32,
-}
-
-#[derive(Debug, Clone)]
-pub struct CompiledModule {
-    pub functions: Vec<CompiledFunction>,
-    pub types: Vec<SubType>,
-    pub function_addrs: Vec<usize>,
-    pub table_addrs: Vec<usize>,
-    pub mem_addrs: Vec<usize>,
-    pub global_addrs: Vec<usize>,
-    pub tag_addrs: Vec<usize>,
-    pub elem_addrs: Vec<usize>,
-    pub data_addrs: Vec<usize>,
-    pub exports: Vec<ExportInstance>,
-
-    pub v128_constants: Vec<i128>,
-    pub jump_tables: Vec<Vec<JumpTableEntry>>,
-    pub shuffle_masks: Vec<[u8; 16]>,
 }
 
 #[repr(u16)]

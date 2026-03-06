@@ -1,4 +1,4 @@
-use gabagool::{CompiledInterpreter, RawValue};
+use gabagool::{Instance, Module, RawValue, Store};
 use minifb::{Key, Window, WindowOptions};
 use std::time::{Duration, Instant};
 
@@ -7,16 +7,16 @@ const CELL_PX: usize = 8;
 
 const PALETTE_NAMES: &[&str] = &["amber", "green", "blue", "pink", "white"];
 
-fn call_i32(interpreter: &mut CompiledInterpreter, name: &str) -> gabagool::Result<i32> {
-    let result = interpreter.invoke(name, vec![])?;
+fn call_i32(store: &mut Store, instance: Instance, name: &str) -> gabagool::Result<i32> {
+    let result = store.invoke(instance, name, vec![])?;
 
     let v = result.into_completed()?[0].as_i32();
 
     Ok(v)
 }
 
-fn read_framebuf(interpreter: &CompiledInterpreter, ptr: usize, len: usize) -> &[u32] {
-    let data = &interpreter.store().memories[0].data;
+fn read_framebuf(store: &Store, ptr: usize, len: usize) -> &[u32] {
+    let data = &store.memories[0].data;
     let bytes = &data[ptr..ptr + len * 4];
 
     // safety: wasm memory is page aligned
@@ -58,8 +58,10 @@ fn read_framebuf(interpreter: &CompiledInterpreter, ptr: usize, len: usize) -> &
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let wasm_bytes = include_bytes!("../wasm/game.wasm");
-    let mut interpreter = CompiledInterpreter::new(wasm_bytes)?;
-    interpreter.invoke("init", vec![])?;
+    let module = Module::new(wasm_bytes)?;
+    let mut store = Store::new();
+    let instance = store.instantiate(&module, vec![])?;
+    store.invoke(instance, "init", vec![])?;
 
     // todo: re-enable once CompiledInterpreter supports snapshots
     // let args: Vec<String> = std::env::args().collect();
@@ -69,9 +71,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     //     .map(|i| args.get(i + 1).map(|s| s.as_str()).unwrap_or(SNAPSHOT_FILE));
     let win_offset: i32 = 0;
 
-    let grid_size = call_i32(&mut interpreter, "get_grid_size")? as usize;
+    let grid_size = call_i32(&mut store, instance, "get_grid_size")? as usize;
     let win_size = grid_size * CELL_PX;
-    let framebuf_ptr = call_i32(&mut interpreter, "get_framebuf_ptr")? as usize;
+    let framebuf_ptr = call_i32(&mut store, instance, "get_framebuf_ptr")? as usize;
 
     let shift = (win_offset as isize) * 40;
     let mut window = Window::new(
@@ -96,7 +98,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // let mut prev_f = false;
     let mut prev_space = false;
 
-    interpreter.invoke("render", vec![])?;
+    store.invoke(instance, "render", vec![])?;
     let pixel_count = win_size * win_size;
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
@@ -110,9 +112,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             //     eprintln!("snapshot error: {e}");
             // }
             palette = (palette + 1) % PALETTE_NAMES.len();
-            interpreter.invoke("set_palette", vec![RawValue::from(palette as i32)])?;
+            store.invoke(instance, "set_palette", vec![RawValue::from(palette as i32)])?;
             println!("Palette: {}", PALETTE_NAMES[palette]);
-            interpreter.invoke("render", vec![])?;
+            store.invoke(instance, "render", vec![])?;
         }
 
         // todo: re-enable fork once CompiledInterpreter supports snapshots
@@ -133,15 +135,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         prev_space = cur_space;
 
         if !paused && last_tick.elapsed() >= tick_interval {
-            interpreter.invoke("tick", vec![])?;
-            interpreter.invoke("render", vec![])?;
+            store.invoke(instance, "tick", vec![])?;
+            store.invoke(instance, "render", vec![])?;
             last_tick = Instant::now();
 
-            let gen = call_i32(&mut interpreter, "get_generation")?;
+            let gen = call_i32(&mut store, instance, "get_generation")?;
             window.set_title(&format!("Game of Life | generation: {gen}"));
         }
 
-        let framebuf = read_framebuf(&interpreter, framebuf_ptr, pixel_count);
+        let framebuf = read_framebuf(&store, framebuf_ptr, pixel_count);
         window.update_with_buffer(framebuf, win_size, win_size)?;
     }
 
