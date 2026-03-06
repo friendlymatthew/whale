@@ -1,4 +1,3 @@
-use anyhow::{Context, Result};
 use gabagool::{CompiledInterpreter, RawValue};
 use minifb::{Key, Window, WindowOptions};
 use std::time::{Duration, Instant};
@@ -8,7 +7,7 @@ const CELL_PX: usize = 8;
 
 const PALETTE_NAMES: &[&str] = &["amber", "green", "blue", "pink", "white"];
 
-fn call_i32(interpreter: &mut CompiledInterpreter, name: &str) -> Result<i32> {
+fn call_i32(interpreter: &mut CompiledInterpreter, name: &str) -> gabagool::Result<i32> {
     let result = interpreter.invoke(name, vec![])?;
 
     let v = result.into_completed()?[0].as_i32();
@@ -57,9 +56,9 @@ fn read_framebuf(interpreter: &CompiledInterpreter, ptr: usize, len: usize) -> &
 //     Ok(())
 // }
 
-fn main() -> Result<()> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let wasm_bytes = include_bytes!("../wasm/game.wasm");
-    let mut interpreter = CompiledInterpreter::new(wasm_bytes).context("failed to load wasm")?;
+    let mut interpreter = CompiledInterpreter::new(wasm_bytes)?;
     interpreter.invoke("init", vec![])?;
 
     // todo: re-enable once CompiledInterpreter supports snapshots
@@ -83,8 +82,7 @@ fn main() -> Result<()> {
             topmost: false,
             ..WindowOptions::default()
         },
-    )
-    .context("failed to create window")?;
+    )?;
     window.set_position(100 + shift, 100 + shift);
     window.set_target_fps(60);
 

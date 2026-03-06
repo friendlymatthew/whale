@@ -10,7 +10,8 @@ use crate::parser::Parser;
 use crate::store::{Store, PAGE_SIZE};
 use crate::value_stack::ValueStack;
 use crate::{compiler, RawValue};
-use anyhow::{anyhow, bail, ensure, Result};
+use crate::error::{Error, Result, Trap};
+use crate::{ensure, instantiation_err, trap};
 use std::ops::Neg;
 
 #[derive(Debug, Clone)]
@@ -23,7 +24,7 @@ impl ExecutionState {
     pub fn into_completed(self) -> Result<Vec<RawValue>> {
         match self {
             Self::Completed(v) => Ok(v),
-            Self::FuelExhausted => bail!("execution paused: fuel exhausted"),
+            Self::FuelExhausted => instantiation_err!("execution paused: fuel exhausted"),
         }
     }
 }
@@ -72,7 +73,7 @@ macro_rules! mem_load_c {
             .checked_add($offset as u64)
             .and_then(|v| usize::try_from(v).ok());
         let Some(ea) = ea.filter(|&ea| ea.saturating_add($width) <= mem.data.len()) else {
-            bail!("trap: oob memory access");
+            trap!(Trap::OutOfBoundsMemoryAccess);
         };
         let $bytes: [u8; $width] = mem.data[ea..ea + $width].try_into().unwrap();
 
@@ -91,7 +92,7 @@ macro_rules! mem_store_c {
             .and_then(|v| usize::try_from(v).ok());
         let mem = &mut $self.store.memories[mem_addr];
         let Some(ea) = ea.filter(|&ea| ea.saturating_add($width) <= mem.data.len()) else {
-            bail!("trap: oob memory access");
+            trap!(Trap::OutOfBoundsMemoryAccess);
         };
         let bytes: [u8; $width] = $to_bytes;
         mem.data[ea..ea + $width].copy_from_slice(&bytes);
@@ -141,9 +142,9 @@ impl CompiledInterpreter {
         // step 4
         ensure!(
             module.import_declarations.len() == external_addresses.len(),
-            "Expected {} imports, got {}",
+            Error::Instantiation(format!("Expected {} imports, got {}",
             module.import_declarations.len(),
-            external_addresses.len()
+            external_addresses.len()))
         );
 
         // step 5
@@ -167,7 +168,7 @@ impl CompiledInterpreter {
                     extern_addr,
                     &import_decl.description
                 )),
-            "import type mismatch"
+            Error::Instantiation("import type mismatch".into())
         );
 
         // step 6
@@ -342,7 +343,7 @@ impl CompiledInterpreter {
             let func_addr = *module_instance
                 .function_addrs
                 .get(start_idx as usize)
-                .ok_or_else(|| anyhow!("start function index {} oob", start_idx))?;
+                .ok_or_else(|| Error::Instantiation(format!("start function index {} oob", start_idx)))?;
             interpreter.push_function_call(func_addr)?;
             interpreter.run()?;
         }
@@ -359,7 +360,7 @@ impl CompiledInterpreter {
     pub fn resume(&mut self) -> Result<ExecutionState> {
         let arity = self
             .pending_arity
-            .ok_or_else(|| anyhow!("no pending execution to resume"))?;
+            .ok_or_else(|| Error::Instantiation("no pending execution to resume".into()))?;
 
         match self.run() {
             Ok(RunOutcome::Completed) => {
@@ -383,7 +384,7 @@ impl CompiledInterpreter {
             .store
             .functions
             .get(addr)
-            .ok_or_else(|| anyhow!("function addr {} oob", addr))?;
+            .ok_or_else(|| Error::Instantiation(format!("function addr {} oob", addr)))?;
 
         match fi {
             FunctionInstance::Local { function_type, .. }
@@ -426,10 +427,10 @@ impl CompiledInterpreter {
                     return Ok(addr);
                 }
 
-                bail!("export'{}' is not a function", name);
+                instantiation_err!("export '{}' is not a function", name);
             }
         }
-        bail!("export '{}' not found", name)
+        instantiation_err!("export '{}' not found", name)
     }
 
     fn invoke_by_addr(
@@ -438,14 +439,14 @@ impl CompiledInterpreter {
         args: Vec<RawValue>,
     ) -> Result<ExecutionState> {
         if self.pending_arity.is_some() {
-            bail!("cannot invoke while execution is paused; call resume() first");
+            instantiation_err!("cannot invoke while execution is paused; call resume() first");
         }
 
         let fi = self
             .store
             .functions
             .get(function_addr)
-            .ok_or_else(|| anyhow!("function addr {} oob", function_addr))?;
+            .ok_or_else(|| Error::Instantiation(format!("function addr {} oob", function_addr)))?;
 
         let (num_args, num_results) = match fi {
             FunctionInstance::Local { function_type, .. } => {
@@ -454,7 +455,7 @@ impl CompiledInterpreter {
             _ => todo!("how does host functions work?"),
         };
 
-        ensure!(num_args == args.len());
+        ensure!(num_args == args.len(), Error::Instantiation(format!("expected {} args, got {}", num_args, args.len())));
 
         self.stack.extend_from_slice(&args);
         self.push_function_call(function_addr)?;
@@ -485,7 +486,7 @@ impl CompiledInterpreter {
     fn push_function_call(&mut self, func_addr: usize) -> Result<()> {
         ensure!(
             self.call_stack.len() < MAX_CALL_DEPTH,
-            "call stack exhausted"
+            Error::Trap(Trap::CallStackExhausted)
         );
 
         let fi = &self.store.functions[func_addr];
@@ -499,18 +500,18 @@ impl CompiledInterpreter {
         let Some(compiled_idx) = self.compiled_func_index(func_addr) else {
             match &self.store.functions[func_addr] {
                 FunctionInstance::Host { code, .. } => {
-                    ensure!(self.stack.len() >= num_args, "not enough args on stack");
+                    ensure!(self.stack.len() >= num_args, Error::Instantiation("not enough args on stack".into()));
                     let args_start = self.stack.len() - num_args;
                     self.stack.truncate(args_start);
                     code();
                     // this is probably not correct but spec tests are no ops
                     return Ok(());
                 }
-                _ => bail!("expected host function at addr {}", func_addr),
+                _ => instantiation_err!("expected host function at addr {}", func_addr),
             }
         };
 
-        ensure!(self.stack.len() >= num_args, "not enough args on stack");
+        ensure!(self.stack.len() >= num_args, Error::Instantiation("not enough args on stack".into()));
         let args_start = self.stack.len() - num_args;
         let mut locals: Vec<RawValue> = self.stack.slice_from(args_start).to_vec();
         self.stack.truncate(args_start);
@@ -568,7 +569,7 @@ impl CompiledInterpreter {
 
             match op {
                 Op::Nop => {}
-                Op::Unreachable => bail!("unreachable executed"),
+                Op::Unreachable => trap!(Trap::Unreachable),
                 Op::Return => {
                     let arity = self.call_stack[depth].arity;
                     let base = self.call_stack[depth].stack_base;
@@ -642,15 +643,15 @@ impl CompiledInterpreter {
                     let elem = self.store.tables[table_addr]
                         .elem
                         .get(i)
-                        .ok_or_else(|| anyhow!("trap: undefined element"))?;
+                        .ok_or_else(|| Error::Trap(Trap::UndefinedElement))?;
 
                     let Ref::FunctionAddr(func_addr) = elem else {
-                        bail!("trap: uninitialized element {}", i);
+                        trap!(Trap::UndefinedElement);
                     };
 
                     let expected = match &self.compiled.types[type_idx as usize].composite_type {
                         CompositeType::Func(ft) => ft,
-                        _ => bail!("type index {} not a func type", type_idx),
+                        _ => instantiation_err!("type index {} not a func type", type_idx),
                     };
 
                     let actual = match &self.store.functions[*func_addr] {
@@ -661,7 +662,7 @@ impl CompiledInterpreter {
                     ensure!(
                         expected.0 .0.len() == actual.0 .0.len()
                             && expected.1 .0.len() == actual.1 .0.len(),
-                        "trap: indirect call type mismatch"
+                        Error::Trap(Trap::IndirectCallTypeMismatch)
                     );
 
                     self.push_function_call(*func_addr)?;
@@ -690,15 +691,15 @@ impl CompiledInterpreter {
                     let elem = self.store.tables[table_addr]
                         .elem
                         .get(i)
-                        .ok_or_else(|| anyhow!("trap: undefined element"))?;
+                        .ok_or_else(|| Error::Trap(Trap::UndefinedElement))?;
 
                     let Ref::FunctionAddr(func_addr) = elem else {
-                        bail!("trap: uninitialized element {}", i);
+                        trap!(Trap::UndefinedElement);
                     };
 
                     let expected = match &self.compiled.types[type_idx as usize].composite_type {
                         CompositeType::Func(ft) => ft,
-                        _ => bail!("type index {} not a func type", type_idx),
+                        _ => instantiation_err!("type index {} not a func type", type_idx),
                     };
 
                     let actual = match &self.store.functions[*func_addr] {
@@ -709,7 +710,7 @@ impl CompiledInterpreter {
                     ensure!(
                         expected.0 .0.len() == actual.0 .0.len()
                             && expected.1 .0.len() == actual.1 .0.len(),
-                        "trap: indirect call type mismatch"
+                        Error::Trap(Trap::IndirectCallTypeMismatch)
                     );
 
                     let func_addr = *func_addr;
@@ -724,17 +725,17 @@ impl CompiledInterpreter {
                 }
                 Op::CallRef { .. } => {
                     let func_addr = match self.stack.pop().as_ref() {
-                        Ref::Null => bail!("trap: null function ref"),
+                        Ref::Null => trap!(Trap::NullReference),
                         Ref::FunctionAddr(f) => f,
-                        _ => bail!("expected function or null ref"),
+                        _ => instantiation_err!("expected function or null ref"),
                     };
                     self.push_function_call(func_addr)?;
                 }
                 Op::ReturnCallRef { .. } => {
                     let func_addr = match self.stack.pop().as_ref() {
-                        Ref::Null => bail!("trap: null function ref"),
+                        Ref::Null => trap!(Trap::NullReference),
                         Ref::FunctionAddr(f) => f,
-                        _ => bail!("expected function or null ref"),
+                        _ => instantiation_err!("expected function or null ref"),
                     };
 
                     let num_args = self.func_num_params(func_addr);
@@ -794,7 +795,7 @@ impl CompiledInterpreter {
                             self.store.globals[addr].global_type.mutability,
                             Mutability::Var
                         ),
-                        "cannot set immutable global"
+                        Error::Instantiation("cannot set immutable global".into())
                     );
                     self.store.globals[addr].value = self.stack.pop();
                 }
@@ -820,7 +821,7 @@ impl CompiledInterpreter {
                 Op::RefEq => todo!(),
                 Op::RefAsNonNull => {
                     let val = self.stack.pop();
-                    ensure!(!matches!(val.as_ref(), Ref::Null), "trap: null reference");
+                    ensure!(!matches!(val.as_ref(), Ref::Null), Error::Trap(Trap::NullReference));
                     self.stack.push(val);
                 }
                 Op::Throw { .. } => todo!(),
@@ -834,7 +835,7 @@ impl CompiledInterpreter {
                     let elem = self.store.tables[ta]
                         .elem
                         .get(i)
-                        .ok_or_else(|| anyhow!("trap: oob table access"))?;
+                        .ok_or_else(|| Error::Trap(Trap::OutOfBoundsTableAccess))?;
 
                     self.stack.push(RawValue::from_ref(*elem));
                 }
@@ -848,7 +849,7 @@ impl CompiledInterpreter {
                     let elem = self.store.tables[ta]
                         .elem
                         .get_mut(i)
-                        .ok_or_else(|| anyhow!("trap: oob table access"))?;
+                        .ok_or_else(|| Error::Trap(Trap::OutOfBoundsTableAccess))?;
 
                     *elem = r;
                 }
@@ -868,11 +869,11 @@ impl CompiledInterpreter {
                     let d = self.stack.pop_address(at);
 
                     if s.saturating_add(n) > self.store.element_segments[ea].elem.len() {
-                        bail!("trap: oob table access");
+                        trap!(Trap::OutOfBoundsTableAccess);
                     }
 
                     if d.saturating_add(n) > self.store.tables[ta].elem.len() {
-                        bail!("trap: oob table access");
+                        trap!(Trap::OutOfBoundsTableAccess);
                     }
 
                     if n > 0 {
@@ -903,11 +904,11 @@ impl CompiledInterpreter {
                     let d = self.stack.pop_address(dst_at);
 
                     if s.saturating_add(n) > self.store.tables[src_a].elem.len() {
-                        bail!("trap: oob table access");
+                        trap!(Trap::OutOfBoundsTableAccess);
                     }
 
                     if d.saturating_add(n) > self.store.tables[dst_a].elem.len() {
-                        bail!("trap: oob table access");
+                        trap!(Trap::OutOfBoundsTableAccess);
                     }
 
                     if n > 0 {
@@ -958,7 +959,7 @@ impl CompiledInterpreter {
 
                     let i = self.stack.pop_address(at);
                     if i.saturating_add(n) > self.store.tables[ta].elem.len() {
-                        bail!("trap: oob table access");
+                        trap!(Trap::OutOfBoundsTableAccess);
                     }
 
                     if n > 0 {
@@ -1084,11 +1085,11 @@ impl CompiledInterpreter {
                     let d = self.stack.pop_address(at);
 
                     if s.saturating_add(n) > self.store.data_segments[da].data.len() {
-                        bail!("trap: oob memory access");
+                        trap!(Trap::OutOfBoundsMemoryAccess);
                     }
 
                     if d.saturating_add(n) > self.store.memories[ma].data.len() {
-                        bail!("trap: oob memory access");
+                        trap!(Trap::OutOfBoundsMemoryAccess);
                     }
 
                     if n > 0 {
@@ -1113,11 +1114,11 @@ impl CompiledInterpreter {
                     let i1 = self.stack.pop_address(at);
 
                     if i1.saturating_add(n) > self.store.memories[m1].data.len() {
-                        bail!("trap: oob memory access");
+                        trap!(Trap::OutOfBoundsMemoryAccess);
                     }
 
                     if i2.saturating_add(n) > self.store.memories[m2].data.len() {
-                        bail!("trap: oob memory access");
+                        trap!(Trap::OutOfBoundsMemoryAccess);
                     }
 
                     if n > 0 {
@@ -1137,7 +1138,7 @@ impl CompiledInterpreter {
                     let i = self.stack.pop_address(at);
 
                     if i.saturating_add(n) > self.store.memories[ma].data.len() {
-                        bail!("trap: oob memory access");
+                        trap!(Trap::OutOfBoundsMemoryAccess);
                     }
 
                     if n > 0 {
@@ -1177,8 +1178,8 @@ impl CompiledInterpreter {
                     let a = pop_val!(self, I32);
                     let b = pop_val!(self, I32);
 
-                    ensure!(a != 0, "wasm trap: integer divide by zero");
-                    ensure!(!(b == i32::MIN && a == -1), "wasm trap: integer overflow");
+                    ensure!(a != 0, Error::Trap(Trap::IntegerDivideByZero));
+                    ensure!(!(b == i32::MIN && a == -1), Error::Trap(Trap::IntegerOverflow));
 
                     self.stack.push(b.wrapping_div(a));
                 }
@@ -1186,21 +1187,21 @@ impl CompiledInterpreter {
                     let a = pop_val!(self, I32);
                     let b = pop_val!(self, I32);
 
-                    ensure!(a != 0, "wasm trap: integer divide by zero");
+                    ensure!(a != 0, Error::Trap(Trap::IntegerDivideByZero));
                     self.stack.push(((b as u32) / (a as u32)) as i32);
                 }
                 Op::I32RemainderSigned => {
                     let a = pop_val!(self, I32);
                     let b = pop_val!(self, I32);
 
-                    ensure!(a != 0, "wasm trap: integer divide by zero");
+                    ensure!(a != 0, Error::Trap(Trap::IntegerDivideByZero));
                     self.stack.push(b.wrapping_rem(a));
                 }
                 Op::I32RemainderUnsigned => {
                     let a = pop_val!(self, I32);
                     let b = pop_val!(self, I32);
 
-                    ensure!(a != 0, "wasm trap: integer divide by zero");
+                    ensure!(a != 0, Error::Trap(Trap::IntegerDivideByZero));
                     self.stack.push(((b as u32) % (a as u32)) as i32);
                 }
                 Op::I32And => binop!(self, I32, |b, a| b & a),
@@ -1247,8 +1248,8 @@ impl CompiledInterpreter {
                     let a = pop_val!(self, I64);
                     let b = pop_val!(self, I64);
 
-                    ensure!(a != 0, "wasm trap: integer divide by zero");
-                    ensure!(!(b == i64::MIN && a == -1), "wasm trap: integer overflow");
+                    ensure!(a != 0, Error::Trap(Trap::IntegerDivideByZero));
+                    ensure!(!(b == i64::MIN && a == -1), Error::Trap(Trap::IntegerOverflow));
 
                     self.stack.push(b.wrapping_div(a));
                 }
@@ -1256,7 +1257,7 @@ impl CompiledInterpreter {
                     let a = pop_val!(self, I64);
                     let b = pop_val!(self, I64);
 
-                    ensure!(a != 0, "wasm trap: integer divide by zero");
+                    ensure!(a != 0, Error::Trap(Trap::IntegerDivideByZero));
 
                     self.stack.push(((b as u64) / (a as u64)) as i64);
                 }
@@ -1264,7 +1265,7 @@ impl CompiledInterpreter {
                     let a = pop_val!(self, I64);
                     let b = pop_val!(self, I64);
 
-                    ensure!(a != 0, "wasm trap: integer divide by zero");
+                    ensure!(a != 0, Error::Trap(Trap::IntegerDivideByZero));
 
                     self.stack.push(b.wrapping_rem(a));
                 }
@@ -1272,7 +1273,7 @@ impl CompiledInterpreter {
                     let a = pop_val!(self, I64);
                     let b = pop_val!(self, I64);
 
-                    ensure!(a != 0, "wasm trap: integer divide by zero");
+                    ensure!(a != 0, Error::Trap(Trap::IntegerDivideByZero));
                     self.stack.push(((b as u64) % (a as u64)) as i64);
                 }
                 Op::I64And => binop!(self, I64, |b, a| b & a),
@@ -1418,41 +1419,41 @@ impl CompiledInterpreter {
                 }
                 Op::I32TruncF32Signed => {
                     let a = pop_val!(self, F32);
-                    ensure!(!a.is_nan(), "wasm trap: invalid conversion to integer");
+                    ensure!(!a.is_nan(), Error::Trap(Trap::InvalidConversionToInteger));
                     let t = a.trunc();
                     ensure!(
                         t >= i32::MIN as f32 && t < i32::MAX as f32,
-                        "wasm trap: integer overflow"
+                        Error::Trap(Trap::IntegerOverflow)
                     );
                     self.stack.push(t as i32);
                 }
                 Op::I32TruncF32Unsigned => {
                     let a = pop_val!(self, F32);
-                    ensure!(!a.is_nan(), "wasm trap: invalid conversion to integer");
+                    ensure!(!a.is_nan(), Error::Trap(Trap::InvalidConversionToInteger));
                     let t = a.trunc();
                     ensure!(
                         t >= 0.0 && t < u32::MAX as f32,
-                        "wasm trap: integer overflow"
+                        Error::Trap(Trap::IntegerOverflow)
                     );
                     self.stack.push(t as u32 as i32);
                 }
                 Op::I32TruncF64Signed => {
                     let a = pop_val!(self, F64);
-                    ensure!(!a.is_nan(), "wasm trap: invalid conversion to integer");
+                    ensure!(!a.is_nan(), Error::Trap(Trap::InvalidConversionToInteger));
                     let t = a.trunc();
                     ensure!(
                         t >= i32::MIN as f64 && t <= i32::MAX as f64,
-                        "wasm trap: integer overflow"
+                        Error::Trap(Trap::IntegerOverflow)
                     );
                     self.stack.push(t as i32);
                 }
                 Op::I32TruncF64Unsigned => {
                     let a = pop_val!(self, F64);
-                    ensure!(!a.is_nan(), "wasm trap: invalid conversion to integer");
+                    ensure!(!a.is_nan(), Error::Trap(Trap::InvalidConversionToInteger));
                     let t = a.trunc();
                     ensure!(
                         t >= 0.0 && t <= u32::MAX as f64,
-                        "wasm trap: integer overflow"
+                        Error::Trap(Trap::IntegerOverflow)
                     );
                     self.stack.push(t as u32 as i32);
                 }
@@ -1466,41 +1467,41 @@ impl CompiledInterpreter {
                 }
                 Op::I64TruncF32Signed => {
                     let a = pop_val!(self, F32);
-                    ensure!(!a.is_nan(), "wasm trap: invalid conversion to integer");
+                    ensure!(!a.is_nan(), Error::Trap(Trap::InvalidConversionToInteger));
                     let t = a.trunc();
                     ensure!(
                         t >= i64::MIN as f32 && t < i64::MAX as f32,
-                        "wasm trap: integer overflow"
+                        Error::Trap(Trap::IntegerOverflow)
                     );
                     self.stack.push(t as i64);
                 }
                 Op::I64TruncF32Unsigned => {
                     let a = pop_val!(self, F32);
-                    ensure!(!a.is_nan(), "wasm trap: invalid conversion to integer");
+                    ensure!(!a.is_nan(), Error::Trap(Trap::InvalidConversionToInteger));
                     let t = a.trunc();
                     ensure!(
                         t >= 0.0 && t < u64::MAX as f32,
-                        "wasm trap: integer overflow"
+                        Error::Trap(Trap::IntegerOverflow)
                     );
                     self.stack.push(t as u64 as i64);
                 }
                 Op::I64TruncF64Signed => {
                     let a = pop_val!(self, F64);
-                    ensure!(!a.is_nan(), "wasm trap: invalid conversion to integer");
+                    ensure!(!a.is_nan(), Error::Trap(Trap::InvalidConversionToInteger));
                     let t = a.trunc();
                     ensure!(
                         t >= i64::MIN as f64 && t < i64::MAX as f64,
-                        "wasm trap: integer overflow"
+                        Error::Trap(Trap::IntegerOverflow)
                     );
                     self.stack.push(t as i64);
                 }
                 Op::I64TruncF64Unsigned => {
                     let a = pop_val!(self, F64);
-                    ensure!(!a.is_nan(), "wasm trap: invalid conversion to integer");
+                    ensure!(!a.is_nan(), Error::Trap(Trap::InvalidConversionToInteger));
                     let t = a.trunc();
                     ensure!(
                         t >= 0.0 && t < u64::MAX as f64,
-                        "wasm trap: integer overflow"
+                        Error::Trap(Trap::IntegerOverflow)
                     );
                     self.stack.push(t as u64 as i64);
                 }
@@ -1704,7 +1705,7 @@ impl CompiledInterpreter {
                 Instruction::I64Mul => ops.push(Op::I64Mul),
                 Instruction::F32Const(v) => ops.push(Op::F32Const { value: *v }),
                 Instruction::F64Const(v) => ops.push(Op::F64Const { value: *v }),
-                other => bail!("unexpected instruction in init sequence: {:?}", other),
+                other => instantiation_err!("unexpected instruction in init sequence: {:?}", other),
             }
         }
         ops.push(Op::Return);
@@ -1793,18 +1794,18 @@ fn eval_const_expr_with_module(
                 let addr = *module
                     .function_addrs
                     .get(*idx as usize)
-                    .ok_or_else(|| anyhow!("ref.func index {} oob", idx))?;
+                    .ok_or_else(|| Error::Instantiation(format!("ref.func index {} oob", idx)))?;
                 stack.push(RawValue::from_ref(Ref::FunctionAddr(addr)));
             }
             Instruction::GlobalGet(idx) => {
                 let store_idx = *module
                     .global_addrs
                     .get(*idx as usize)
-                    .ok_or_else(|| anyhow!("global index {} oob in const expr", idx))?;
+                    .ok_or_else(|| Error::Instantiation(format!("global index {} oob in const expr", idx)))?;
                 let global = store
                     .globals
                     .get(store_idx)
-                    .ok_or_else(|| anyhow!("global store index {} oob in const expr", store_idx))?;
+                    .ok_or_else(|| Error::Instantiation(format!("global store index {} oob in const expr", store_idx)))?;
                 stack.push(global.value);
             }
             Instruction::RefI31 => {
@@ -1835,24 +1836,24 @@ fn eval_const_expr_with_module(
                 let (b, a) = (const_pop_i64(&mut stack)?, const_pop_i64(&mut stack)?);
                 stack.push(RawValue::from(a.wrapping_mul(b)));
             }
-            other => bail!("unexpected instruction in const expr: {:?}", other),
+            other => instantiation_err!("unexpected instruction in const expr: {:?}", other),
         }
     }
     stack
         .pop()
-        .ok_or_else(|| anyhow!("const expr produced no value"))
+        .ok_or_else(|| Error::Instantiation("const expr produced no value".into()))
 }
 
 fn const_pop_i32(stack: &mut Vec<RawValue>) -> Result<i32> {
     stack
         .pop()
         .map(|v| v.as_i32())
-        .ok_or_else(|| anyhow!("stack underflow in const expr"))
+        .ok_or_else(|| Error::Instantiation("stack underflow in const expr".into()))
 }
 
 fn const_pop_i64(stack: &mut Vec<RawValue>) -> Result<i64> {
     stack
         .pop()
         .map(|v| v.as_i64())
-        .ok_or_else(|| anyhow!("stack underflow in const expr"))
+        .ok_or_else(|| Error::Instantiation("stack underflow in const expr".into()))
 }

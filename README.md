@@ -5,37 +5,33 @@ A WebAssembly interpreter written from scratch.
 This project aims to build a fully spec-compliant, performant interpreter whose entire execution state can be serialized, suspended, and restored.
 
 ```rs
-use gabagool::{ExecutionState, Interpreter, Value};
+use gabagool::{CompiledInterpreter, RawValue};
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let wasm_bytes = std::fs::read("stair_climb.wasm")?;
+fn main() -> gabagool::Result<()> {
+    let wasm_bytes = std::fs::read("stair_climb.wasm").unwrap();
 
-    // run to completion as a reference
-    let full_result = Interpreter::new(&wasm_bytes)?
-        .invoke("stair_climb", vec![Value::I32(4)])?
+    let mut interpreter = CompiledInterpreter::new(&wasm_bytes)?;
+
+    let results = interpreter
+        .invoke("stair_climb", vec![RawValue::from(4i32)])?
         .into_completed()?;
 
-    // run with limited fuel
-    // execution suspends when fuel runs out
-    let mut interp = Interpreter::new(&wasm_bytes)?;
-    interp.set_fuel(50);
-
-    let state = interp
-        .invoke("stair_climb", vec![Value::I32(4)])?;
-    assert_eq!(state, ExecutionState::FuelExhausted);
-
-    // snapshot the suspended interpreter to bytes
-    let snapshot = interp.snapshot()?;
-
-    // restored on another machine, in another process, whatever
-    let mut restored = Interpreter::from_snapshot(&snapshot)?;
-    restored.set_fuel(10_000);
-
-    let resumed_result = restored.resume()?.into_completed()?;
-
-    assert_eq!(full_result, resumed_result);
+    println!("{:?}", results);
 
     Ok(())
+}
+```
+
+Errors are structured via `gabagool::Error`, which distinguishes between parse errors, instantiation errors, and runtime traps:
+
+```rs
+use gabagool::Error;
+
+match result {
+    Err(Error::Parse(msg)) => eprintln!("bad module: {msg}"),
+    Err(Error::Instantiation(msg)) => eprintln!("failed to instantiate: {msg}"),
+    Err(Error::Trap(trap)) => eprintln!("runtime trap: {trap}"),
+    Ok(values) => println!("{values:?}"),
 }
 ```
 

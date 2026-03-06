@@ -6,4 +6,3 @@ edition = "2021"
 [dependencies]
 gabagool = { path = "../.." }
 minifb = "0.27"
-anyhow = "1"

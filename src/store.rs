@@ -1,6 +1,7 @@
 use std::rc::Rc;
 
-use anyhow::{anyhow, bail, Result};
+use crate::error::{Error, Result};
+use crate::instantiation_err;
 
 use crate::binary_grammar::{
     CompositeType, DataSegment, ElementSegment, ExportDescription, Function, FunctionType, Global,
@@ -46,16 +47,16 @@ impl Store {
             .types
             .get(type_index as usize)
             .ok_or_else(|| {
-                anyhow!(
+                Error::Instantiation(format!(
                     "Type index {} too large to index into module instance types. Len: {}",
                     type_index,
                     module_instance.types.len()
-                )
+                ))
             })?;
 
         match &sub_type.composite_type {
             CompositeType::Func(ft) => Ok(ft.clone()),
-            _ => bail!("Type index {} is not a function type", type_index),
+            _ => instantiation_err!("Type index {} is not a function type", type_index),
         }
     }
 
@@ -255,31 +256,31 @@ impl Store {
                     addr: *module_instance
                         .function_addrs
                         .get(x as usize)
-                        .ok_or_else(|| anyhow!("oob"))?,
+                        .ok_or_else(|| Error::Instantiation("oob".into()))?,
                 },
                 ExportDescription::Table(x) => ExternalValue::Table {
                     addr: *module_instance
                         .table_addrs
                         .get(x as usize)
-                        .ok_or_else(|| anyhow!("oob"))?,
+                        .ok_or_else(|| Error::Instantiation("oob".into()))?,
                 },
                 ExportDescription::Mem(x) => ExternalValue::Memory {
                     addr: *module_instance
                         .mem_addrs
                         .get(x as usize)
-                        .ok_or_else(|| anyhow!("oob"))?,
+                        .ok_or_else(|| Error::Instantiation("oob".into()))?,
                 },
                 ExportDescription::Global(x) => ExternalValue::Global {
                     addr: *module_instance
                         .global_addrs
                         .get(x as usize)
-                        .ok_or_else(|| anyhow!("oob"))?,
+                        .ok_or_else(|| Error::Instantiation("oob".into()))?,
                 },
                 ExportDescription::Tag(x) => ExternalValue::Tag {
                     addr: *module_instance
                         .tag_addrs
                         .get(x as usize)
-                        .ok_or_else(|| anyhow!("oob"))?,
+                        .ok_or_else(|| Error::Instantiation("oob".into()))?,
                 },
             };
 

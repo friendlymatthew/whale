@@ -6,14 +6,10 @@ edition = "2021"
 authors = ["friendlymatthew"]
 license = "MIT"
 
-[dependencies]
-anyhow = "1"
-
 
 [profile.release]
 debug = 1
 panic = "abort"
-lto = true
 codegen-units = 1
 
 [build-dependencies]
