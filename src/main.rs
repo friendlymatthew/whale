@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use gabagool::{CompiledInterpreter, Value, ValueType};
+use gabagool::{CompiledInterpreter, RawValue, ValueType};
 use std::fs;
 use std::path::PathBuf;
 
@@ -33,12 +33,12 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn parse_value(value_type: &ValueType, s: &str) -> Result<Value> {
+fn parse_value(value_type: &ValueType, s: &str) -> Result<RawValue> {
     match value_type {
-        ValueType::I32 => Ok(Value::I32(s.parse().context("invalid i32")?)),
-        ValueType::I64 => Ok(Value::I64(s.parse().context("invalid i64")?)),
-        ValueType::F32 => Ok(Value::F32(s.parse().context("invalid f32")?)),
-        ValueType::F64 => Ok(Value::F64(s.parse().context("invalid f64")?)),
+        ValueType::I32 => Ok(RawValue::from(s.parse::<i32>().context("invalid i32")?)),
+        ValueType::I64 => Ok(RawValue::from(s.parse::<i64>().context("invalid i64")?)),
+        ValueType::F32 => Ok(RawValue::from(s.parse::<f32>().context("invalid f32")?)),
+        ValueType::F64 => Ok(RawValue::from(s.parse::<f64>().context("invalid f64")?)),
         _ => anyhow::bail!("unsupported parameter type"),
     }
 }

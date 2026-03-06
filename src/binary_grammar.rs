@@ -1,5 +1,3 @@
-use serde::{Deserialize, Serialize};
-
 /// The 4-byte preamble that starts at the top of the encoded module.
 pub const MAGIC_NUMBER: [u8; 4] = *b"\0asm";
 
@@ -75,7 +73,7 @@ pub enum Section {
     Tag(TagSection),
 }
 
-#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone)]
 pub enum HeapType {
     Func,     // 0x70
     Extern,   // 0x6F
@@ -92,20 +90,20 @@ pub enum HeapType {
     TypeIndex(u32),
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum AddrType {
     I32,
     I64,
 }
 
-#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone)]
 pub enum RefType {
     FuncRef,
     ExternRef,
     Ref { nullable: bool, heap_type: HeapType },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub enum ValueType {
     I32,
     I64,
@@ -115,75 +113,75 @@ pub enum ValueType {
     Ref(RefType),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct ResultType(pub Vec<ValueType>);
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct FunctionType(pub ResultType, pub ResultType);
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy)]
 pub struct Limit {
     pub min: u64,
     pub max: u64,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 pub struct MemoryType {
     pub addr_type: AddrType,
     pub limit: Limit,
 }
 
-#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone)]
 pub struct TableType {
     pub element_reference_type: RefType,
     pub addr_type: AddrType,
     pub limit: Limit,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub enum StorageType {
     Val(ValueType),
     I8,
     I16,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct FieldType {
     pub storage_type: StorageType,
     pub mutability: Mutability,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct StructType {
     pub fields: Vec<FieldType>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct ArrayType {
     pub field_type: FieldType,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub enum CompositeType {
     Func(FunctionType),
     Struct(StructType),
     Array(ArrayType),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct SubType {
     pub is_final: bool,
     pub supertypes: Vec<u32>,
     pub composite_type: CompositeType,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub enum Mutability {
     Const,
     Var,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct GlobalType {
     pub value_type: ValueType,
     pub mutability: Mutability,
@@ -253,7 +251,7 @@ pub struct GlobalSection {
     pub globals: Vec<Global>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy)]
 pub struct Tag {
     pub type_index: u32,
 }
@@ -265,7 +263,7 @@ pub struct TagSection {
 
 // Instructions
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub enum CatchClause {
     Catch { tag: u32, label: u32 },
     CatchRef { tag: u32, label: u32 },
@@ -273,14 +271,14 @@ pub enum CatchClause {
     CatchAllRef { label: u32 },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub enum BlockType {
     Empty,
     SingleValue(ValueType),
     TypeIndex(i32),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct MemArg {
     pub align: u32,
     pub offset: u64,
@@ -290,7 +288,7 @@ pub struct MemArg {
 pub const TERM_END_BYTE: u8 = 0x0B;
 pub const TERM_ELSE_BYTE: u8 = 0x05;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub enum Instruction {
     Unreachable,
     Nop,
@@ -810,7 +808,7 @@ pub struct ExportSection {
     pub exports: Vec<Export>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 pub enum ElementMode {
     Passive,
     Active {
@@ -820,7 +818,7 @@ pub enum ElementMode {
     Declarative,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 pub struct ElementSegment {
     pub ref_type: RefType,
     pub expression: Vec<Vec<Instruction>>,
@@ -832,13 +830,13 @@ pub struct ElementSection {
     pub elements: Vec<ElementSegment>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 pub struct Local {
     pub count: u32,
     pub value_type: ValueType,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 pub struct Function {
     pub type_index: u32,
     pub locals: Vec<Local>,
@@ -850,7 +848,7 @@ pub struct CodeSection {
     pub codes: Vec<Function>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 pub enum DataMode {
     Active {
         memory: u32,

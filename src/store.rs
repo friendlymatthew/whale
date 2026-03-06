@@ -8,14 +8,13 @@ use crate::binary_grammar::{
 };
 use crate::execution_grammar::{
     DataInstance, ElementInstance, ExportInstance, ExternalValue, FunctionInstance, GlobalInstance,
-    MemoryInstance, ModuleInstance, Ref, TableInstance, TagInstance, Value,
+    MemoryInstance, ModuleInstance, Ref, TableInstance, TagInstance,
 };
-
-use serde::{Deserialize, Serialize};
+use crate::RawValue;
 
 pub const PAGE_SIZE: usize = 65536;
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default)]
 pub struct Store {
     pub functions: Vec<FunctionInstance>,
     pub tables: Vec<TableInstance>,
@@ -121,7 +120,7 @@ impl Store {
         memory_address
     }
 
-    fn allocate_global(&mut self, global: Global, initializer_value: Value) -> usize {
+    fn allocate_global(&mut self, global: Global, initializer_value: RawValue) -> usize {
         let global_address = self.globals.len();
 
         self.globals.push(GlobalInstance {
@@ -168,7 +167,7 @@ impl Store {
         &mut self,
         module: Module,
         extern_addrs: Vec<ExternalValue>,
-        initial_global_values: Vec<Value>,
+        initial_global_values: Vec<RawValue>,
         initial_table_refs: Vec<Ref>,
         element_segment_refs: Vec<Vec<Ref>>,
     ) -> Result<Rc<ModuleInstance>> {

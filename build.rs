@@ -398,25 +398,25 @@ mod spec_tests {
             .iter()
             .map(|arg| match arg {
                 WastArg::Core(WastArgCore::I32(v)) => {
-                    Some(format!("Value::I32({})", render_i32(*v)))
+                    Some(format!("RawValue::from({})", render_i32(*v)))
                 }
                 WastArg::Core(WastArgCore::I64(v)) => {
-                    Some(format!("Value::I64({})", render_i64(*v)))
+                    Some(format!("RawValue::from({})", render_i64(*v)))
                 }
                 WastArg::Core(WastArgCore::F32(v)) => {
-                    Some(format!("Value::F32(f32::from_bits({}))", v.bits))
+                    Some(format!("RawValue::from(f32::from_bits({}))", v.bits))
                 }
                 WastArg::Core(WastArgCore::F64(v)) => {
-                    Some(format!("Value::F64(f64::from_bits({}))", v.bits))
+                    Some(format!("RawValue::from(f64::from_bits({}))", v.bits))
                 }
                 WastArg::Core(WastArgCore::RefNull(_)) => {
-                    Some("Value::Ref(Ref::Null)".to_string())
+                    Some("RawValue::from_ref(Ref::Null)".to_string())
                 }
                 WastArg::Core(WastArgCore::RefExtern(n)) => {
-                    Some(format!("Value::Ref(Ref::RefExtern({} as usize))", n))
+                    Some(format!("RawValue::from_ref(Ref::RefExtern({} as usize))", n))
                 }
                 WastArg::Core(WastArgCore::RefHost(n)) => {
-                    Some(format!("Value::Ref(Ref::RefExtern({} as usize))", n))
+                    Some(format!("RawValue::from_ref(Ref::RefExtern({} as usize))", n))
                 }
                 _ => None,
             })

@@ -1,113 +1,127 @@
 use std::ops::Range;
-
-use anyhow::{anyhow, bail, ensure, Result};
+use std::ptr;
 
 use crate::binary_grammar::AddrType;
-use crate::execution_grammar::Value;
+use crate::execution_grammar::RawValue;
 
-/*
-note: now that the compiler can keep track of stack height, we could probably track the
-max stack height per function
-
-then by the time we execute code, we can refactor the Value stack to skip the bounds check
-
-safety:
-    - pop never underflows
-    wasm requires us to validate before executing. since validation proves every pop is balanced
-    by a prior push and the compiler tracks stack height, if the compiler is correct, underflow
-    should be impossible lol
-
-    - push never overflows
-    wasm guarantees every function's max stack depth is bounded and computed at validation time
-    the compiler can probably record the max stack height per function
-*/
-
+/// the value stack operates without any bounds check
+///
+/// safety:
+///     - wasm validation guarantees every instruction sequence is stack-safe
+///     - we track the max stack height when we compile so we can never overflow
 pub struct ValueStack {
-    inner: Vec<Value>,
+    inner: Box<[RawValue]>,
+    cursor: usize,
 }
 
 impl ValueStack {
     pub fn with_capacity(cap: usize) -> Self {
         Self {
-            inner: Vec::with_capacity(cap),
+            inner: vec![RawValue::default(); cap].into_boxed_slice(),
+            cursor: 0,
         }
     }
 
-    pub fn push<V: Into<Value>>(&mut self, val: V) {
-        self.inner.push(val.into());
+    pub fn push<V: Into<RawValue>>(&mut self, val: V) {
+        *self.get_mut(self.cursor) = val.into();
+
+        self.cursor += 1;
     }
 
-    pub fn pop(&mut self) -> Result<Value> {
-        self.inner.pop().ok_or_else(|| anyhow!("overflow"))
+    pub fn push_v128(&mut self, v: i128) {
+        let (hi, lo) = RawValue::from_v128(v);
+        self.extend_from_slice(&[hi, lo]);
     }
 
-    pub fn last(&self) -> Result<&Value> {
-        self.inner.last().ok_or_else(|| anyhow!("overflow"))
+    pub fn pop(&mut self) -> RawValue {
+        self.cursor -= 1;
+        *self.get(self.cursor)
+    }
+
+    pub fn last(&self) -> &RawValue {
+        unsafe { self.inner.get_unchecked(self.cursor - 1) }
     }
 
     pub const fn len(&self) -> usize {
-        self.inner.len()
+        self.cursor
     }
 
     pub const fn is_empty(&self) -> bool {
-        self.inner.is_empty()
+        self.cursor == 0
     }
 
     pub fn clear(&mut self) {
-        self.inner.clear();
+        self.cursor = 0;
     }
 
-    pub fn extend(&mut self, iter: impl IntoIterator<Item = Value>) {
-        self.inner.extend(iter);
+    pub fn extend_from_slice(&mut self, slice: &[RawValue]) {
+        unsafe {
+            ptr::copy_nonoverlapping(
+                slice.as_ptr(),
+                self.inner.as_mut_ptr().add(self.cursor),
+                slice.len(),
+            );
+        }
+        self.cursor += slice.len();
     }
 
     pub fn truncate(&mut self, len: usize) {
-        self.inner.truncate(len);
+        self.cursor = len;
     }
 
-    pub fn split_off(&mut self, at: usize) -> Vec<Value> {
-        self.inner.split_off(at)
+    pub fn slice_from(&self, start: usize) -> &[RawValue] {
+        self.get_slice(start..self.cursor)
     }
 
-    pub fn copy_within(&mut self, src: Range<usize>, dest: usize) {
-        self.inner.copy_within(src, dest);
-    }
-
-    pub fn slice_from(&self, start: usize) -> &[Value] {
-        &self.inner[start..]
-    }
-
-    pub fn pop_n(&mut self, n: usize) -> Result<Vec<Value>> {
-        ensure!(self.inner.len() >= n, "stack underflow");
-        let start = self.inner.len() - n;
-
-        Ok(self.inner.split_off(start))
+    pub fn pop_n(&mut self, n: usize) -> &[RawValue] {
+        self.cursor -= n;
+        self.get_slice(self.cursor..self.cursor + n)
     }
 
     pub fn keep_top(&mut self, keep: usize, drop: usize) {
         if drop > 0 {
-            let len = self.inner.len();
-            assert!(
-                len >= keep + drop,
-                "compiler error: keep_top(keep={keep}, drop={drop}) but stack len={len}"
-            );
-            self.inner.copy_within(len - keep..len, len - keep - drop);
-            self.inner.truncate(len - drop);
+            unsafe {
+                let ptr = self.inner.as_mut_ptr();
+                let src = ptr.add(self.cursor - keep);
+                let dst = ptr.add(self.cursor - keep - drop);
+
+                ptr::copy(src, dst, keep);
+            }
+            self.cursor -= drop;
         }
     }
 
-    pub fn pop_address(&mut self, addr_type: AddrType) -> Result<usize> {
-        match (addr_type, self.pop()?) {
-            (AddrType::I32, Value::I32(v)) => Ok(v as usize),
-            (AddrType::I64, Value::I64(v)) => Ok(v as usize),
-            (at, _) => bail!("expected {at:?} address"),
+    pub fn copy_within(&mut self, src: Range<usize>, dest: usize) {
+        let count = src.end - src.start;
+        unsafe {
+            let ptr = self.inner.as_mut_ptr();
+            ptr::copy(ptr.add(src.start), ptr.add(dest), count);
+        }
+    }
+
+    pub fn pop_address(&mut self, addr_type: AddrType) -> usize {
+        match addr_type {
+            AddrType::I32 => self.pop().as_i32() as usize,
+            AddrType::I64 => self.pop().as_i64() as usize,
         }
     }
 
     pub fn push_address(&mut self, value: usize, addr_type: AddrType) {
         match addr_type {
-            AddrType::I32 => self.inner.push(Value::I32(value as i32)),
-            AddrType::I64 => self.inner.push(Value::I64(value as i64)),
+            AddrType::I32 => self.push(value as i32),
+            AddrType::I64 => self.push(value as i64),
         }
+    }
+
+    fn get(&self, index: usize) -> &RawValue {
+        unsafe { self.inner.get_unchecked(index) }
+    }
+
+    fn get_mut(&mut self, index: usize) -> &mut RawValue {
+        unsafe { self.inner.get_unchecked_mut(index) }
+    }
+
+    fn get_slice(&self, range: Range<usize>) -> &[RawValue] {
+        unsafe { self.inner.get_unchecked(range) }
     }
 }

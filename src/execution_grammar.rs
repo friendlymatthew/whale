@@ -1,74 +1,100 @@
 use std::fmt::{Debug, Formatter};
 use std::rc::Rc;
 
-use anyhow::{bail, Result};
-use serde::{Deserialize, Serialize};
-
 use crate::binary_grammar::{
-    Function, FunctionType, GlobalType, MemoryType, RefType, SubType, TableType, ValueType,
+    Function, FunctionType, GlobalType, MemoryType, RefType, SubType, TableType,
 };
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[repr(u8)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum Ref {
-    Null,
-    FunctionAddr(usize),
-    RefExtern(usize),
-    I31(i32),
+    Null = 0,
+    FunctionAddr(usize) = 1,
+    RefExtern(usize) = 2,
+    I31(i32) = 3,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Serialize, Deserialize)]
-pub enum Value {
-    I32(i32),
-    I64(i64),
-    F32(f32),
-    F64(f64),
-    V128(i128),
-    Ref(Ref),
-}
+#[derive(Debug, Copy, Clone, Default)]
+pub struct RawValue(u64);
 
-impl Value {
-    pub const fn default(value_type: &ValueType) -> Self {
-        match value_type {
-            ValueType::I32 => Self::I32(0),
-            ValueType::I64 => Self::I64(0),
-            ValueType::F32 => Self::F32(0.0),
-            ValueType::F64 => Self::F64(0.0),
-            ValueType::V128 => Self::V128(0),
-            ValueType::Ref(_) => Self::Ref(Ref::Null),
+impl RawValue {
+    pub const fn as_i32(self) -> i32 {
+        self.0 as i32
+    }
+
+    pub const fn as_i64(self) -> i64 {
+        self.0 as i64
+    }
+
+    pub const fn as_f32(self) -> f32 {
+        f32::from_bits(self.0 as u32)
+    }
+
+    pub const fn as_f64(self) -> f64 {
+        f64::from_bits(self.0)
+    }
+
+    pub const fn as_ref(self) -> Ref {
+        let tag = self.0 >> 62;
+        let payload = self.0 & 0x3FFFFFFFFFFFFFFF;
+
+        match tag {
+            0 => Ref::Null,
+            1 => Ref::FunctionAddr(payload as usize),
+            2 => Ref::RefExtern(payload as usize),
+            3 => Ref::I31(payload as i32),
+            _ => unreachable!(),
         }
+    }
+
+    pub const fn from_ref(r: Ref) -> Self {
+        let raw = match r {
+            Ref::Null => 0u64,
+            Ref::FunctionAddr(a) => (1u64 << 62) | a as u64,
+            Ref::RefExtern(a) => (2u64 << 62) | a as u64,
+            Ref::I31(v) => (3u64 << 62) | (v as u32 as u64),
+        };
+
+        Self(raw)
+    }
+
+    pub const fn from_v128(v: i128) -> (Self, Self) {
+        let hi = (v >> 64) as u64;
+        let lo = v as u64;
+
+        (Self(hi), Self(lo))
+    }
+
+    pub const fn as_v128(self, lo: Self) -> i128 {
+        (self.0 as i128) << 64 | lo.0 as i128
     }
 }
 
-#[macro_export]
-macro_rules! try_from_value {
-    ($value_variant: ident, $ty:ty) => {
-        impl TryFrom<Value> for $ty {
-            type Error = anyhow::Error;
-
-            fn try_from(value: Value) -> std::result::Result<Self, Self::Error> {
-                match value {
-                    Value::$value_variant(v) => Ok(v),
-                    _ => bail!(""),
-                }
-            }
-        }
-
-        impl From<$ty> for Value {
-            fn from(value: $ty) -> Self {
-                Value::$value_variant(value)
-            }
-        }
-    };
+impl From<i32> for RawValue {
+    fn from(value: i32) -> Self {
+        Self(value as u64)
+    }
 }
 
-try_from_value!(I32, i32);
-try_from_value!(I64, i64);
-try_from_value!(F32, f32);
-try_from_value!(F64, f64);
-try_from_value!(V128, i128);
-try_from_value!(Ref, Ref);
+impl From<i64> for RawValue {
+    fn from(value: i64) -> Self {
+        Self(value as u64)
+    }
+}
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+impl From<f32> for RawValue {
+    fn from(value: f32) -> Self {
+        Self(f32::to_bits(value) as u64)
+    }
+}
+
+impl From<f64> for RawValue {
+    fn from(value: f64) -> Self {
+        Self(f64::to_bits(value))
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct ModuleInstance {
     pub types: Vec<SubType>,
     pub function_addrs: Vec<usize>,
@@ -136,89 +162,41 @@ impl Debug for FunctionInstance {
     }
 }
 
-impl Serialize for FunctionInstance {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        use serde::ser::SerializeStructVariant;
-        match self {
-            Self::Local {
-                function_type,
-                module,
-                code,
-            } => {
-                let mut sv =
-                    serializer.serialize_struct_variant("FunctionInstance", 0, "Local", 3)?;
-                sv.serialize_field("function_type", function_type)?;
-                sv.serialize_field("module", module)?;
-                sv.serialize_field("code", code)?;
-                sv.end()
-            }
-            Self::Host { .. } => Err(serde::ser::Error::custom(
-                "cannot serialize Host function instance",
-            )),
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for FunctionInstance {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        enum FunctionInstanceData {
-            Local {
-                function_type: FunctionType,
-                module: ModuleInstance,
-                code: Function,
-            },
-        }
-        let data = FunctionInstanceData::deserialize(deserializer)?;
-        match data {
-            FunctionInstanceData::Local {
-                function_type,
-                module,
-                code,
-            } => Ok(Self::Local {
-                function_type,
-                module: Rc::new(module),
-                code,
-            }),
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 pub struct TableInstance {
     pub table_type: TableType,
     pub elem: Vec<Ref>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 pub struct MemoryInstance {
     pub memory_type: MemoryType,
     pub data: Vec<u8>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 pub struct GlobalInstance {
     pub global_type: GlobalType,
-    pub value: Value,
+    pub value: RawValue,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 pub struct ElementInstance {
     pub ref_type: RefType,
     pub elem: Vec<Ref>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 pub struct TagInstance {
     pub tag_type: FunctionType,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 pub struct DataInstance {
     pub data: Vec<u8>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub enum ExternalValue {
     Function { addr: usize },
     Table { addr: usize },
@@ -227,7 +205,7 @@ pub enum ExternalValue {
     Tag { addr: usize },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct ExportInstance {
     pub name: String,
     pub value: ExternalValue,

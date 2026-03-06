@@ -17,6 +17,7 @@ pub struct CompiledFunction {
 
     // contains [args; num_args] [...local_types]
     pub local_types: Vec<ValueType>,
+    pub(crate) max_stack_height: u32,
 }
 
 #[derive(Debug, Clone)]

@@ -1,7 +1,7 @@
 use gabagool::{
     parser::Parser, AddrType, CompositeType, CompiledInterpreter, ExportInstance, ExternalValue,
     FunctionInstance, GlobalInstance, GlobalType, ImportDescription, Limit,
-    MemoryInstance, MemoryType, Ref, Store, Value, ValueType,
+    MemoryInstance, MemoryType, RawValue, Ref, Store, ValueType,
 };
 
 #[derive(Debug)]
@@ -52,11 +52,11 @@ fn setup_spectest_imports(store: &mut Store, wasm_bytes: &[u8]) -> Vec<ExternalV
         .map(|import| match &import.description {
             ImportDescription::Global(gt) => {
                 let value = match gt.value_type {
-                    ValueType::I32 => Value::I32(666),
-                    ValueType::I64 => Value::I64(666),
-                    ValueType::F32 => Value::F32(666.6),
-                    ValueType::F64 => Value::F64(666.6),
-                    _ => Value::I32(0),
+                    ValueType::I32 => RawValue::from(666i32),
+                    ValueType::I64 => RawValue::from(666i64),
+                    ValueType::F32 => RawValue::from(666.6f32),
+                    ValueType::F64 => RawValue::from(666.6f64),
+                    _ => RawValue::from(0i32),
                 };
                 let addr = store.globals.len();
                 store.globals.push(GlobalInstance {
@@ -104,7 +104,7 @@ fn setup_spectest_imports(store: &mut Store, wasm_bytes: &[u8]) -> Vec<ExternalV
 fn spec_step_assert_return(
     interp: &mut CompiledInterpreter,
     name: &str,
-    args: &[Value],
+    args: &[RawValue],
     expected: &[ExpectedValue],
     step: usize,
     failures: &mut Vec<String>,
@@ -133,7 +133,7 @@ fn spec_step_assert_return(
 fn spec_step_assert_trap(
     interp: &mut CompiledInterpreter,
     name: &str,
-    args: &[Value],
+    args: &[RawValue],
     step: usize,
     failures: &mut Vec<String>,
 ) {
@@ -148,11 +148,11 @@ fn spec_step_assert_trap(
     }
 }
 
-fn spec_step_invoke(interp: &mut CompiledInterpreter, name: &str, args: &[Value]) {
+fn spec_step_invoke(interp: &mut CompiledInterpreter, name: &str, args: &[RawValue]) {
     let _ = interp.invoke(name, args.to_vec());
 }
 
-fn values_match(expected: &[ExpectedValue], actual: &[Value]) -> bool {
+fn values_match(expected: &[ExpectedValue], actual: &[RawValue]) -> bool {
     if expected.len() != actual.len() {
         return false;
     }
@@ -160,29 +160,37 @@ fn values_match(expected: &[ExpectedValue], actual: &[Value]) -> bool {
     expected
         .iter()
         .zip(actual.iter())
-        .all(|(exp, act)| match (exp, act) {
-            (ExpectedValue::I32(e), Value::I32(a)) => e == a,
-            (ExpectedValue::I64(e), Value::I64(a)) => e == a,
-            (ExpectedValue::F32(pat), Value::F32(a)) => match pat {
-                NanPat::CanonicalNan => a.is_nan() && (a.to_bits() & 0x003F_FFFF == 0),
-                NanPat::ArithmeticNan => a.is_nan(),
-                NanPat::Value(e) => a.to_bits() == *e,
-            },
-            (ExpectedValue::F64(pat), Value::F64(a)) => match pat {
-                NanPat::CanonicalNan => a.is_nan() && (a.to_bits() & 0x0007_FFFF_FFFF_FFFF == 0),
-                NanPat::ArithmeticNan => a.is_nan(),
-                NanPat::Value(e) => a.to_bits() == *e,
-            },
-            (ExpectedValue::Ref(exp_ref), Value::Ref(act_ref)) => match (exp_ref, act_ref) {
-                (ExpectedRef::Null, Ref::Null) => true,
-                (ExpectedRef::Extern(Some(n)), Ref::RefExtern(m)) => *n as usize == *m,
-                (ExpectedRef::Extern(None), Ref::RefExtern(_)) => true,
-                (ExpectedRef::Func, Ref::FunctionAddr(_)) => true,
-                (ExpectedRef::NonNull, r) => *r != Ref::Null,
-                (ExpectedRef::I31, Ref::I31(_)) => true,
-                _ => false,
-            },
-            _ => false,
+        .all(|(exp, act)| match exp {
+            ExpectedValue::I32(e) => *e == act.as_i32(),
+            ExpectedValue::I64(e) => *e == act.as_i64(),
+            ExpectedValue::F32(pat) => {
+                let a = act.as_f32();
+                match pat {
+                    NanPat::CanonicalNan => a.is_nan() && (a.to_bits() & 0x003F_FFFF == 0),
+                    NanPat::ArithmeticNan => a.is_nan(),
+                    NanPat::Value(e) => a.to_bits() == *e,
+                }
+            }
+            ExpectedValue::F64(pat) => {
+                let a = act.as_f64();
+                match pat {
+                    NanPat::CanonicalNan => a.is_nan() && (a.to_bits() & 0x0007_FFFF_FFFF_FFFF == 0),
+                    NanPat::ArithmeticNan => a.is_nan(),
+                    NanPat::Value(e) => a.to_bits() == *e,
+                }
+            }
+            ExpectedValue::Ref(exp_ref) => {
+                let act_ref = act.as_ref();
+                match (exp_ref, act_ref) {
+                    (ExpectedRef::Null, Ref::Null) => true,
+                    (ExpectedRef::Extern(Some(n)), Ref::RefExtern(m)) => *n as usize == m,
+                    (ExpectedRef::Extern(None), Ref::RefExtern(_)) => true,
+                    (ExpectedRef::Func, Ref::FunctionAddr(_)) => true,
+                    (ExpectedRef::NonNull, r) => r != Ref::Null,
+                    (ExpectedRef::I31, Ref::I31(_)) => true,
+                    _ => false,
+                }
+            }
         })
 }
 
@@ -210,11 +218,11 @@ fn resolve_imports_with_registered(
             match &import.description {
                 ImportDescription::Global(gt) => {
                     let value = match gt.value_type {
-                        ValueType::I32 => Value::I32(666),
-                        ValueType::I64 => Value::I64(666),
-                        ValueType::F32 => Value::F32(666.6),
-                        ValueType::F64 => Value::F64(666.6),
-                        _ => Value::I32(0),
+                        ValueType::I32 => RawValue::from(666i32),
+                        ValueType::I64 => RawValue::from(666i64),
+                        ValueType::F32 => RawValue::from(666.6f32),
+                        ValueType::F64 => RawValue::from(666.6f64),
+                        _ => RawValue::from(0i32),
                     };
                     let addr = store.globals.len();
                     store.globals.push(GlobalInstance {

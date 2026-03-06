@@ -2,41 +2,47 @@ use crate::binary_grammar::{
     AddrType, CompositeType, DataMode, DataSegment, ElementMode, ElementSegment, ImportDescription,
     Instruction, Mutability, ValueType,
 };
-use crate::compiler;
 use crate::execution_grammar::{
-    ExportInstance, ExternalValue, FunctionInstance, GlobalInstance, ModuleInstance, Ref, Value,
+    ExportInstance, ExternalValue, FunctionInstance, GlobalInstance, ModuleInstance, Ref,
 };
 use crate::ir::{CompiledFunction, CompiledModule, Op};
 use crate::parser::Parser;
 use crate::store::{Store, PAGE_SIZE};
 use crate::value_stack::ValueStack;
+use crate::{compiler, RawValue};
 use anyhow::{anyhow, bail, ensure, Result};
-use serde::{Deserialize, Serialize};
 use std::ops::Neg;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub enum ExecutionState {
-    Completed(Vec<Value>),
+    Completed(Vec<RawValue>),
     FuelExhausted,
 }
 
 impl ExecutionState {
-    pub fn into_completed(self) -> Result<Vec<Value>> {
+    pub fn into_completed(self) -> Result<Vec<RawValue>> {
         match self {
             Self::Completed(v) => Ok(v),
             Self::FuelExhausted => bail!("execution paused: fuel exhausted"),
         }
     }
 }
+
 macro_rules! pop_val {
-    ($self:expr, $variant:ident) => {
-        match $self.stack.pop()? {
-            Value::$variant(v) => v,
-            other => bail!(
-                concat!("expected ", stringify!($variant), ", got: {:?}"),
-                other
-            ),
-        }
+    ($self:expr, I32) => {
+        $self.stack.pop().as_i32()
+    };
+    ($self:expr, I64) => {
+        $self.stack.pop().as_i64()
+    };
+    ($self:expr, F32) => {
+        $self.stack.pop().as_f32()
+    };
+    ($self:expr, F64) => {
+        $self.stack.pop().as_f64()
+    };
+    ($self:expr, Ref) => {
+        $self.stack.pop().as_ref()
     };
 }
 
@@ -44,7 +50,7 @@ macro_rules! binop {
     ($self:expr, $variant:ident, |$b:ident, $a:ident| $expr:expr) => {{
         let $a = pop_val!($self, $variant);
         let $b = pop_val!($self, $variant);
-        $self.stack.push(Value::$variant($expr));
+        $self.stack.push($expr);
     }};
 }
 
@@ -52,20 +58,16 @@ macro_rules! cmpop {
     ($self:expr, $variant:ident, |$b:ident, $a:ident| $expr:expr) => {{
         let $a = pop_val!($self, $variant);
         let $b = pop_val!($self, $variant);
-        $self.stack.push(Value::I32(($expr) as i32));
+        $self.stack.push($expr as i32);
     }};
 }
 
 macro_rules! mem_load_c {
     ($self:expr, $offset:expr, $memory:expr, $width:literal, |$bytes:ident| $convert:expr) => {{
         let mem_addr = $self.compiled.mem_addrs[$memory as usize];
-        let addr_val = $self.stack.pop()?;
         let mem = &$self.store.memories[mem_addr];
-        let base: u64 = match (mem.memory_type.addr_type, addr_val) {
-            (AddrType::I32, Value::I32(v)) => v as u64,
-            (AddrType::I64, Value::I64(v)) => v as u64,
-            (at, v) => bail!("expected {:?} address, got: {:?}", at, v),
-        };
+        let base = $self.stack.pop_address(mem.memory_type.addr_type) as u64;
+
         let ea = base
             .checked_add($offset as u64)
             .and_then(|v| usize::try_from(v).ok());
@@ -73,22 +75,17 @@ macro_rules! mem_load_c {
             bail!("trap: oob memory access");
         };
         let $bytes: [u8; $width] = mem.data[ea..ea + $width].try_into().unwrap();
-        let val: Value = ($convert).into();
-        $self.stack.push(val);
+
+        $self.stack.push($convert);
     }};
 }
 
 macro_rules! mem_store_c {
     ($self:expr, $offset:expr, $memory:expr, $width:literal, |$val:ident| $to_bytes:expr) => {{
-        let $val = $self.stack.pop()?;
-        let addr_val = $self.stack.pop()?;
+        let $val = $self.stack.pop();
         let mem_addr = $self.compiled.mem_addrs[$memory as usize];
         let addr_type = $self.store.memories[mem_addr].memory_type.addr_type;
-        let base: u64 = match (addr_type, addr_val) {
-            (AddrType::I32, Value::I32(v)) => v as u64,
-            (AddrType::I64, Value::I64(v)) => v as u64,
-            (at, v) => bail!("expected {:?} address, got: {:?}", at, v),
-        };
+        let base = $self.stack.pop_address(addr_type) as u64;
         let ea = base
             .checked_add($offset as u64)
             .and_then(|v| usize::try_from(v).ok());
@@ -104,7 +101,7 @@ macro_rules! mem_store_c {
 struct CallFrame {
     compiled_func_idx: usize,
     pc: usize,
-    locals: Vec<Value>,
+    locals: Vec<RawValue>,
     stack_base: usize,
     arity: usize,
 }
@@ -241,10 +238,7 @@ impl CompiledInterpreter {
             .iter()
             .map(|td| {
                 let val = eval_const_expr_with_module(&td.init, &store, &module_instance_0)?;
-                match val {
-                    Value::Ref(r) => Ok(r),
-                    _ => bail!("table init expr must produce a ref"),
-                }
+                Ok(val.as_ref())
             })
             .collect::<Result<Vec<_>>>()?;
 
@@ -257,10 +251,7 @@ impl CompiledInterpreter {
                     .iter()
                     .map(|expr| {
                         let val = eval_const_expr_with_module(expr, &store, &module_instance_0)?;
-                        match val {
-                            Value::Ref(r) => Ok(r),
-                            _ => bail!("element expr must produce a ref"),
-                        }
+                        Ok(val.as_ref())
                     })
                     .collect::<Result<Vec<_>>>()
             })
@@ -321,10 +312,18 @@ impl CompiledInterpreter {
             }
         }
 
+        let max_func_stack = compiled
+            .functions
+            .iter()
+            .map(|f| f.max_stack_height as usize)
+            .max()
+            .unwrap_or(1_024);
+        let stack_capacity = max_func_stack.saturating_mul(MAX_CALL_DEPTH).max(1024);
+
         let mut interpreter = Self {
             compiled,
             store,
-            stack: ValueStack::with_capacity(1024),
+            stack: ValueStack::with_capacity(stack_capacity),
             call_stack: Vec::with_capacity(MAX_CALL_DEPTH),
             fuel: None,
             pending_arity: None,
@@ -352,7 +351,7 @@ impl CompiledInterpreter {
         Ok(interpreter)
     }
 
-    pub fn invoke(&mut self, name: &str, args: Vec<Value>) -> Result<ExecutionState> {
+    pub fn invoke(&mut self, name: &str, args: Vec<RawValue>) -> Result<ExecutionState> {
         let addr = self.get_export_func_addr(name)?;
         self.invoke_by_addr(addr, args)
     }
@@ -364,9 +363,9 @@ impl CompiledInterpreter {
 
         match self.run() {
             Ok(RunOutcome::Completed) => {
-                let results = self.stack.pop_n(arity)?;
+                let results = self.stack.pop_n(arity);
                 self.pending_arity = None;
-                Ok(ExecutionState::Completed(results))
+                Ok(ExecutionState::Completed(results.to_vec()))
             }
             Ok(RunOutcome::FuelExhausted) => Ok(ExecutionState::FuelExhausted),
             Err(e) => {
@@ -433,7 +432,11 @@ impl CompiledInterpreter {
         bail!("export '{}' not found", name)
     }
 
-    fn invoke_by_addr(&mut self, function_addr: usize, args: Vec<Value>) -> Result<ExecutionState> {
+    fn invoke_by_addr(
+        &mut self,
+        function_addr: usize,
+        args: Vec<RawValue>,
+    ) -> Result<ExecutionState> {
         if self.pending_arity.is_some() {
             bail!("cannot invoke while execution is paused; call resume() first");
         }
@@ -453,14 +456,14 @@ impl CompiledInterpreter {
 
         ensure!(num_args == args.len());
 
-        self.stack.extend(args);
+        self.stack.extend_from_slice(&args);
         self.push_function_call(function_addr)?;
 
         match self.run() {
             Ok(RunOutcome::Completed) => {
-                let results = self.stack.pop_n(num_results)?;
+                let results = self.stack.pop_n(num_results);
                 self.pending_arity = None;
-                Ok(ExecutionState::Completed(results))
+                Ok(ExecutionState::Completed(results.to_vec()))
             }
             Ok(RunOutcome::FuelExhausted) => {
                 self.pending_arity = Some(num_results);
@@ -509,12 +512,12 @@ impl CompiledInterpreter {
 
         ensure!(self.stack.len() >= num_args, "not enough args on stack");
         let args_start = self.stack.len() - num_args;
-        let mut locals: Vec<Value> = self.stack.slice_from(args_start).to_vec();
+        let mut locals: Vec<RawValue> = self.stack.slice_from(args_start).to_vec();
         self.stack.truncate(args_start);
 
         let cf = &self.compiled.functions[compiled_idx];
-        for vt in &cf.local_types[num_args..] {
-            locals.push(Value::default(vt));
+        for _ in &cf.local_types[num_args..] {
+            locals.push(RawValue::default());
         }
 
         let stack_base = self.stack.len();
@@ -607,8 +610,8 @@ impl CompiledInterpreter {
                     self.call_stack[depth].pc = entry_target.target as usize;
                 }
                 Op::BrOnNull { target, keep, drop } => {
-                    let val = self.stack.pop()?;
-                    if matches!(val, Value::Ref(Ref::Null)) {
+                    let val = self.stack.pop();
+                    if matches!(val.as_ref(), Ref::Null) {
                         self.stack.keep_top(keep as usize, drop as usize);
                         self.call_stack[depth].pc = target as usize;
                     } else {
@@ -616,8 +619,8 @@ impl CompiledInterpreter {
                     }
                 }
                 Op::BrOnNonNull { target, keep, drop } => {
-                    let val = self.stack.pop()?;
-                    if !matches!(val, Value::Ref(Ref::Null)) {
+                    let val = self.stack.pop();
+                    if !matches!(val.as_ref(), Ref::Null) {
                         self.stack.push(val);
                         self.stack.keep_top(keep as usize, drop as usize);
                         self.call_stack[depth].pc = target as usize;
@@ -634,7 +637,7 @@ impl CompiledInterpreter {
                     let table_addr = self.compiled.table_addrs[table_idx as usize];
                     let addr_type = self.store.tables[table_addr].table_type.addr_type;
 
-                    let i = self.stack.pop_address(addr_type)?;
+                    let i = self.stack.pop_address(addr_type);
 
                     let elem = self.store.tables[table_addr]
                         .elem
@@ -683,7 +686,7 @@ impl CompiledInterpreter {
                     let table_addr = self.compiled.table_addrs[table_idx as usize];
                     let addr_type = self.store.tables[table_addr].table_type.addr_type;
 
-                    let i = self.stack.pop_address(addr_type)?;
+                    let i = self.stack.pop_address(addr_type);
                     let elem = self.store.tables[table_addr]
                         .elem
                         .get(i)
@@ -720,17 +723,17 @@ impl CompiledInterpreter {
                     self.push_function_call(func_addr)?;
                 }
                 Op::CallRef { .. } => {
-                    let func_addr = match self.stack.pop()? {
-                        Value::Ref(Ref::Null) => bail!("trap: null function ref"),
-                        Value::Ref(Ref::FunctionAddr(f)) => f,
+                    let func_addr = match self.stack.pop().as_ref() {
+                        Ref::Null => bail!("trap: null function ref"),
+                        Ref::FunctionAddr(f) => f,
                         _ => bail!("expected function or null ref"),
                     };
                     self.push_function_call(func_addr)?;
                 }
                 Op::ReturnCallRef { .. } => {
-                    let func_addr = match self.stack.pop()? {
-                        Value::Ref(Ref::Null) => bail!("trap: null function ref"),
-                        Value::Ref(Ref::FunctionAddr(f)) => f,
+                    let func_addr = match self.stack.pop().as_ref() {
+                        Ref::Null => bail!("trap: null function ref"),
+                        Ref::FunctionAddr(f) => f,
                         _ => bail!("expected function or null ref"),
                     };
 
@@ -748,7 +751,7 @@ impl CompiledInterpreter {
                 Op::F64Const { value } => self.stack.push(value),
                 Op::V128Const { table_idx } => {
                     let v = self.compiled.v128_constants[table_idx as usize];
-                    self.stack.push(v);
+                    self.stack.push_v128(v);
                 }
                 Op::LocalGet { local_idx } => {
                     let locals = &self.call_stack[depth].locals;
@@ -761,7 +764,7 @@ impl CompiledInterpreter {
                     self.stack.push(val);
                 }
                 Op::LocalSet { local_idx } => {
-                    let val = self.stack.pop()?;
+                    let val = self.stack.pop();
                     let locals = &mut self.call_stack[depth].locals;
                     assert!(
                         (local_idx as usize) < locals.len(),
@@ -771,7 +774,7 @@ impl CompiledInterpreter {
                     locals[local_idx as usize] = val;
                 }
                 Op::LocalTee { local_idx } => {
-                    let val = *self.stack.last()?;
+                    let val = *self.stack.last();
                     let locals = &mut self.call_stack[depth].locals;
                     assert!(
                         (local_idx as usize) < locals.len(),
@@ -793,34 +796,31 @@ impl CompiledInterpreter {
                         ),
                         "cannot set immutable global"
                     );
-                    self.store.globals[addr].value = self.stack.pop()?;
+                    self.store.globals[addr].value = self.stack.pop();
                 }
                 Op::Drop => {
-                    self.stack.pop()?;
+                    self.stack.pop();
                 }
                 Op::Select => {
                     let cond = pop_val!(self, I32);
-                    let val2 = self.stack.pop()?;
-                    let val1 = self.stack.pop()?;
+                    let val2 = self.stack.pop();
+                    let val1 = self.stack.pop();
                     self.stack.push(if cond != 0 { val1 } else { val2 });
                 }
-                Op::RefNull(_) => self.stack.push(Ref::Null),
+                Op::RefNull(_) => self.stack.push(RawValue::from_ref(Ref::Null)),
                 Op::RefIsNull => {
-                    let val = self.stack.pop()?;
-                    let is_null = matches!(val, Value::Ref(Ref::Null));
-                    self.stack.push(Value::I32(is_null as i32));
+                    let val = self.stack.pop();
+                    let is_null = matches!(val.as_ref(), Ref::Null);
+                    self.stack.push(is_null as i32);
                 }
                 Op::RefFunc { func_idx } => {
                     let addr = self.compiled.function_addrs[func_idx as usize];
-                    self.stack.push(Value::Ref(Ref::FunctionAddr(addr)));
+                    self.stack.push(RawValue::from_ref(Ref::FunctionAddr(addr)));
                 }
                 Op::RefEq => todo!(),
                 Op::RefAsNonNull => {
-                    let val = self.stack.pop()?;
-                    ensure!(
-                        !matches!(val, Value::Ref(Ref::Null)),
-                        "trap: null reference"
-                    );
+                    let val = self.stack.pop();
+                    ensure!(!matches!(val.as_ref(), Ref::Null), "trap: null reference");
                     self.stack.push(val);
                 }
                 Op::Throw { .. } => todo!(),
@@ -829,25 +829,21 @@ impl CompiledInterpreter {
                     let ta = self.compiled.table_addrs[table_idx as usize];
                     let addr_type = self.store.tables[ta].table_type.addr_type;
 
-                    let i = self.stack.pop_address(addr_type)?;
+                    let i = self.stack.pop_address(addr_type);
 
                     let elem = self.store.tables[ta]
                         .elem
                         .get(i)
                         .ok_or_else(|| anyhow!("trap: oob table access"))?;
 
-                    self.stack.push(Value::Ref(*elem));
+                    self.stack.push(RawValue::from_ref(*elem));
                 }
                 Op::TableSet { table_idx } => {
                     let ta = self.compiled.table_addrs[table_idx as usize];
-                    let val = self.stack.pop()?;
-
-                    let Value::Ref(r) = val else {
-                        bail!("expected ref for table.set");
-                    };
+                    let r = self.stack.pop().as_ref();
 
                     let at = self.store.tables[ta].table_type.addr_type;
-                    let i = self.stack.pop_address(at)?;
+                    let i = self.stack.pop_address(at);
 
                     let elem = self.store.tables[ta]
                         .elem
@@ -869,7 +865,7 @@ impl CompiledInterpreter {
                     let (n, s) = (n as usize, s as usize);
 
                     let at = self.store.tables[ta].table_type.addr_type;
-                    let d = self.stack.pop_address(at)?;
+                    let d = self.stack.pop_address(at);
 
                     if s.saturating_add(n) > self.store.element_segments[ea].elem.len() {
                         bail!("trap: oob table access");
@@ -902,9 +898,9 @@ impl CompiledInterpreter {
                         _ => AddrType::I32,
                     };
 
-                    let n = self.stack.pop_address(n_at)?;
-                    let s = self.stack.pop_address(src_at)?;
-                    let d = self.stack.pop_address(dst_at)?;
+                    let n = self.stack.pop_address(n_at);
+                    let s = self.stack.pop_address(src_at);
+                    let d = self.stack.pop_address(dst_at);
 
                     if s.saturating_add(n) > self.store.tables[src_a].elem.len() {
                         bail!("trap: oob table access");
@@ -926,19 +922,17 @@ impl CompiledInterpreter {
                 Op::TableGrow { table_idx } => {
                     let ta = self.compiled.table_addrs[table_idx as usize];
                     let at = self.store.tables[ta].table_type.addr_type;
-                    let n = self.stack.pop_address(at)?;
+                    let n = self.stack.pop_address(at);
 
-                    let Value::Ref(r) = self.stack.pop()? else {
-                        bail!("expected ref for table.grow");
-                    };
+                    let r = self.stack.pop().as_ref();
 
                     let old_size = self.store.tables[ta].elem.len();
                     let new_size = (old_size as u64).checked_add(n as u64);
 
                     if new_size.is_none_or(|s| s > self.store.tables[ta].table_type.limit.max) {
                         match at {
-                            AddrType::I32 => self.stack.push(Value::I32(-1)),
-                            AddrType::I64 => self.stack.push(Value::I64(-1)),
+                            AddrType::I32 => self.stack.push(-1i32),
+                            AddrType::I64 => self.stack.push(-1i64),
                         }
                         continue;
                     }
@@ -958,13 +952,11 @@ impl CompiledInterpreter {
                 Op::TableFill { table_idx } => {
                     let ta = self.compiled.table_addrs[table_idx as usize];
                     let at = self.store.tables[ta].table_type.addr_type;
-                    let n = self.stack.pop_address(at)?;
+                    let n = self.stack.pop_address(at);
 
-                    let Value::Ref(r) = self.stack.pop()? else {
-                        bail!("expected ref for table.fill");
-                    };
+                    let r = self.stack.pop().as_ref();
 
-                    let i = self.stack.pop_address(at)?;
+                    let i = self.stack.pop_address(at);
                     if i.saturating_add(n) > self.store.tables[ta].elem.len() {
                         bail!("trap: oob table access");
                     }
@@ -1015,80 +1007,50 @@ impl CompiledInterpreter {
                 Op::I64Load32Unsigned { offset, memory } => {
                     mem_load_c!(self, offset, memory, 4, |b| u32::from_le_bytes(b) as i64)
                 }
-                Op::I32Store { offset, memory } => mem_store_c!(self, offset, memory, 4, |v| {
-                    let Value::I32(c) = v else {
-                        bail!("expected i32")
-                    };
-                    c.to_le_bytes()
-                }),
-                Op::I64Store { offset, memory } => mem_store_c!(self, offset, memory, 8, |v| {
-                    let Value::I64(c) = v else {
-                        bail!("expected i64")
-                    };
-                    c.to_le_bytes()
-                }),
-                Op::F32Store { offset, memory } => mem_store_c!(self, offset, memory, 4, |v| {
-                    let Value::F32(c) = v else {
-                        bail!("expected f32")
-                    };
-                    c.to_le_bytes()
-                }),
-                Op::F64Store { offset, memory } => mem_store_c!(self, offset, memory, 8, |v| {
-                    let Value::F64(c) = v else {
-                        bail!("expected f64")
-                    };
-                    c.to_le_bytes()
-                }),
-                Op::I32Store8 { offset, memory } => mem_store_c!(self, offset, memory, 1, |v| {
-                    let Value::I32(c) = v else {
-                        bail!("expected i32")
-                    };
-                    (c as u8).to_le_bytes()
-                }),
-                Op::I32Store16 { offset, memory } => mem_store_c!(self, offset, memory, 2, |v| {
-                    let Value::I32(c) = v else {
-                        bail!("expected i32")
-                    };
-                    (c as u16).to_le_bytes()
-                }),
-                Op::I64Store8 { offset, memory } => mem_store_c!(self, offset, memory, 1, |v| {
-                    let Value::I64(c) = v else {
-                        bail!("expected i64")
-                    };
-                    (c as u8).to_le_bytes()
-                }),
-                Op::I64Store16 { offset, memory } => mem_store_c!(self, offset, memory, 2, |v| {
-                    let Value::I64(c) = v else {
-                        bail!("expected i64")
-                    };
-                    (c as u16).to_le_bytes()
-                }),
-                Op::I64Store32 { offset, memory } => mem_store_c!(self, offset, memory, 4, |v| {
-                    let Value::I64(c) = v else {
-                        bail!("expected i64")
-                    };
-                    (c as u32).to_le_bytes()
-                }),
+                Op::I32Store { offset, memory } => {
+                    mem_store_c!(self, offset, memory, 4, |v| v.as_i32().to_le_bytes())
+                }
+                Op::I64Store { offset, memory } => {
+                    mem_store_c!(self, offset, memory, 8, |v| v.as_i64().to_le_bytes())
+                }
+                Op::F32Store { offset, memory } => {
+                    mem_store_c!(self, offset, memory, 4, |v| v.as_f32().to_le_bytes())
+                }
+                Op::F64Store { offset, memory } => {
+                    mem_store_c!(self, offset, memory, 8, |v| v.as_f64().to_le_bytes())
+                }
+                Op::I32Store8 { offset, memory } => {
+                    mem_store_c!(self, offset, memory, 1, |v| (v.as_i32() as u8)
+                        .to_le_bytes())
+                }
+                Op::I32Store16 { offset, memory } => {
+                    mem_store_c!(self, offset, memory, 2, |v| (v.as_i32() as u16)
+                        .to_le_bytes())
+                }
+                Op::I64Store8 { offset, memory } => {
+                    mem_store_c!(self, offset, memory, 1, |v| (v.as_i64() as u8)
+                        .to_le_bytes())
+                }
+                Op::I64Store16 { offset, memory } => {
+                    mem_store_c!(self, offset, memory, 2, |v| (v.as_i64() as u16)
+                        .to_le_bytes())
+                }
+                Op::I64Store32 { offset, memory } => {
+                    mem_store_c!(self, offset, memory, 4, |v| (v.as_i64() as u32)
+                        .to_le_bytes())
+                }
                 Op::MemorySize { memory_idx } => {
                     let ma = self.compiled.mem_addrs[memory_idx as usize];
                     let mem = &self.store.memories[ma];
                     let size = mem.data.len() / PAGE_SIZE;
 
-                    match mem.memory_type.addr_type {
-                        AddrType::I32 => self.stack.push(Value::I32(size as i32)),
-                        AddrType::I64 => self.stack.push(Value::I64(size as i64)),
-                    }
+                    self.stack.push_address(size, mem.memory_type.addr_type);
                 }
                 Op::MemoryGrow { memory_idx } => {
                     let ma = self.compiled.mem_addrs[memory_idx as usize];
-                    let grow_val = self.stack.pop()?;
                     let mem = &mut self.store.memories[ma];
-
-                    let page_count = match (mem.memory_type.addr_type, grow_val) {
-                        (AddrType::I32, Value::I32(n)) => n as usize,
-                        (AddrType::I64, Value::I64(n)) => n as usize,
-                        (at, v) => bail!("expected {:?} value, got: {:?}", at, v),
-                    };
+                    let at = mem.memory_type.addr_type;
+                    let page_count = self.stack.pop_address(at);
 
                     let old_size = mem.data.len() / PAGE_SIZE;
                     let new_size = old_size + page_count;
@@ -1096,9 +1058,9 @@ impl CompiledInterpreter {
                     const MAX_PAGES: usize = 65536;
 
                     if new_size > MAX_PAGES || new_size as u64 > mem.memory_type.limit.max {
-                        match mem.memory_type.addr_type {
-                            AddrType::I32 => self.stack.push(Value::I32(-1)),
-                            AddrType::I64 => self.stack.push(Value::I64(-1)),
+                        match at {
+                            AddrType::I32 => self.stack.push(-1i32),
+                            AddrType::I64 => self.stack.push(-1i64),
                         }
                         continue;
                     }
@@ -1119,7 +1081,7 @@ impl CompiledInterpreter {
 
                     let n = pop_val!(self, I32) as usize;
                     let s = pop_val!(self, I32) as usize;
-                    let d = self.stack.pop_address(at)?;
+                    let d = self.stack.pop_address(at);
 
                     if s.saturating_add(n) > self.store.data_segments[da].data.len() {
                         bail!("trap: oob memory access");
@@ -1146,9 +1108,9 @@ impl CompiledInterpreter {
                     let m2 = self.compiled.mem_addrs[src_memory_idx as usize];
                     let at = self.store.memories[m1].memory_type.addr_type;
 
-                    let n = self.stack.pop_address(at)?;
-                    let i2 = self.stack.pop_address(at)?;
-                    let i1 = self.stack.pop_address(at)?;
+                    let n = self.stack.pop_address(at);
+                    let i2 = self.stack.pop_address(at);
+                    let i1 = self.stack.pop_address(at);
 
                     if i1.saturating_add(n) > self.store.memories[m1].data.len() {
                         bail!("trap: oob memory access");
@@ -1170,9 +1132,9 @@ impl CompiledInterpreter {
                 Op::MemoryFill { memory_idx } => {
                     let ma = self.compiled.mem_addrs[memory_idx as usize];
                     let at = self.store.memories[ma].memory_type.addr_type;
-                    let n = self.stack.pop_address(at)?;
+                    let n = self.stack.pop_address(at);
                     let val = pop_val!(self, I32);
-                    let i = self.stack.pop_address(at)?;
+                    let i = self.stack.pop_address(at);
 
                     if i.saturating_add(n) > self.store.memories[ma].data.len() {
                         bail!("trap: oob memory access");
@@ -1239,8 +1201,7 @@ impl CompiledInterpreter {
                     let b = pop_val!(self, I32);
 
                     ensure!(a != 0, "wasm trap: integer divide by zero");
-                    self.stack
-                        .push(Value::I32(((b as u32) % (a as u32)) as i32));
+                    self.stack.push(((b as u32) % (a as u32)) as i32);
                 }
                 Op::I32And => binop!(self, I32, |b, a| b & a),
                 Op::I32Or => binop!(self, I32, |b, a| b | a),
@@ -1255,7 +1216,7 @@ impl CompiledInterpreter {
                 Op::I32RotateRight => binop!(self, I32, |b, a| b.rotate_right(a as u32 % 32)),
                 Op::I64EqZero => {
                     let a = pop_val!(self, I64);
-                    self.stack.push(Value::I32((a == 0) as i32));
+                    self.stack.push((a == 0) as i32);
                 }
                 Op::I64Eq => cmpop!(self, I64, |b, a| b == a),
                 Op::I64Ne => cmpop!(self, I64, |b, a| b != a),
@@ -1269,15 +1230,15 @@ impl CompiledInterpreter {
                 Op::I64GeUnsigned => cmpop!(self, I64, |b, a| (b as u64) >= (a as u64)),
                 Op::I64CountLeadingZeros => {
                     let a = pop_val!(self, I64);
-                    self.stack.push(Value::I64(a.leading_zeros() as i64));
+                    self.stack.push(a.leading_zeros() as i64);
                 }
                 Op::I64CountTrailingZeros => {
                     let a = pop_val!(self, I64);
-                    self.stack.push(Value::I64(a.trailing_zeros() as i64));
+                    self.stack.push(a.trailing_zeros() as i64);
                 }
                 Op::I64PopCount => {
                     let a = pop_val!(self, I64);
-                    self.stack.push(Value::I64(a.count_ones() as i64));
+                    self.stack.push(a.count_ones() as i64);
                 }
                 Op::I64Add => binop!(self, I64, |b, a| b.wrapping_add(a)),
                 Op::I64Sub => binop!(self, I64, |b, a| b.wrapping_sub(a)),
@@ -1289,7 +1250,7 @@ impl CompiledInterpreter {
                     ensure!(a != 0, "wasm trap: integer divide by zero");
                     ensure!(!(b == i64::MIN && a == -1), "wasm trap: integer overflow");
 
-                    self.stack.push(Value::I64(b.wrapping_div(a)));
+                    self.stack.push(b.wrapping_div(a));
                 }
                 Op::I64DivUnsigned => {
                     let a = pop_val!(self, I64);
@@ -1297,8 +1258,7 @@ impl CompiledInterpreter {
 
                     ensure!(a != 0, "wasm trap: integer divide by zero");
 
-                    self.stack
-                        .push(Value::I64(((b as u64) / (a as u64)) as i64));
+                    self.stack.push(((b as u64) / (a as u64)) as i64);
                 }
                 Op::I64RemainderSigned => {
                     let a = pop_val!(self, I64);
@@ -1306,15 +1266,14 @@ impl CompiledInterpreter {
 
                     ensure!(a != 0, "wasm trap: integer divide by zero");
 
-                    self.stack.push(Value::I64(b.wrapping_rem(a)));
+                    self.stack.push(b.wrapping_rem(a));
                 }
                 Op::I64RemainderUnsigned => {
                     let a = pop_val!(self, I64);
                     let b = pop_val!(self, I64);
 
                     ensure!(a != 0, "wasm trap: integer divide by zero");
-                    self.stack
-                        .push(Value::I64(((b as u64) % (a as u64)) as i64));
+                    self.stack.push(((b as u64) % (a as u64)) as i64);
                 }
                 Op::I64And => binop!(self, I64, |b, a| b & a),
                 Op::I64Or => binop!(self, I64, |b, a| b | a),
@@ -1335,31 +1294,31 @@ impl CompiledInterpreter {
                 Op::F32Ge => cmpop!(self, F32, |b, a| b >= a),
                 Op::F32Abs => {
                     let a = pop_val!(self, F32);
-                    self.stack.push(Value::F32(a.abs()));
+                    self.stack.push(a.abs());
                 }
                 Op::F32Neg => {
                     let a = pop_val!(self, F32);
-                    self.stack.push(Value::F32(a.neg()));
+                    self.stack.push(a.neg());
                 }
                 Op::F32Ceil => {
                     let a = pop_val!(self, F32);
-                    self.stack.push(Value::F32(a.ceil()));
+                    self.stack.push(a.ceil());
                 }
                 Op::F32Floor => {
                     let a = pop_val!(self, F32);
-                    self.stack.push(Value::F32(a.floor()));
+                    self.stack.push(a.floor());
                 }
                 Op::F32Trunc => {
                     let a = pop_val!(self, F32);
-                    self.stack.push(Value::F32(a.trunc()));
+                    self.stack.push(a.trunc());
                 }
                 Op::F32Nearest => {
                     let a = pop_val!(self, F32);
-                    self.stack.push(Value::F32(a.round_ties_even()));
+                    self.stack.push(a.round_ties_even());
                 }
                 Op::F32Sqrt => {
                     let a = pop_val!(self, F32);
-                    self.stack.push(Value::F32(a.sqrt()));
+                    self.stack.push(a.sqrt());
                 }
                 Op::F32Add => binop!(self, F32, |b, a| b + a),
                 Op::F32Sub => binop!(self, F32, |b, a| b - a),
@@ -1375,7 +1334,7 @@ impl CompiledInterpreter {
                     } else {
                         a.min(b)
                     };
-                    self.stack.push(Value::F32(r));
+                    self.stack.push(r);
                 }
                 Op::F32Max => {
                     let a = pop_val!(self, F32);
@@ -1387,7 +1346,7 @@ impl CompiledInterpreter {
                     } else {
                         a.max(b)
                     };
-                    self.stack.push(Value::F32(r));
+                    self.stack.push(r);
                 }
                 Op::F32CopySign => binop!(self, F32, |b, a| b.copysign(a)),
                 Op::F64Eq => cmpop!(self, F64, |b, a| b == a),
@@ -1398,31 +1357,31 @@ impl CompiledInterpreter {
                 Op::F64Ge => cmpop!(self, F64, |b, a| b >= a),
                 Op::F64Abs => {
                     let a = pop_val!(self, F64);
-                    self.stack.push(Value::F64(a.abs()));
+                    self.stack.push(a.abs());
                 }
                 Op::F64Neg => {
                     let a = pop_val!(self, F64);
-                    self.stack.push(Value::F64(a.neg()));
+                    self.stack.push(a.neg());
                 }
                 Op::F64Ceil => {
                     let a = pop_val!(self, F64);
-                    self.stack.push(Value::F64(a.ceil()));
+                    self.stack.push(a.ceil());
                 }
                 Op::F64Floor => {
                     let a = pop_val!(self, F64);
-                    self.stack.push(Value::F64(a.floor()));
+                    self.stack.push(a.floor());
                 }
                 Op::F64Trunc => {
                     let a = pop_val!(self, F64);
-                    self.stack.push(Value::F64(a.trunc()));
+                    self.stack.push(a.trunc());
                 }
                 Op::F64Nearest => {
                     let a = pop_val!(self, F64);
-                    self.stack.push(Value::F64(a.round_ties_even()));
+                    self.stack.push(a.round_ties_even());
                 }
                 Op::F64Sqrt => {
                     let a = pop_val!(self, F64);
-                    self.stack.push(Value::F64(a.sqrt()));
+                    self.stack.push(a.sqrt());
                 }
                 Op::F64Add => binop!(self, F64, |b, a| b + a),
                 Op::F64Sub => binop!(self, F64, |b, a| b - a),
@@ -1438,7 +1397,7 @@ impl CompiledInterpreter {
                     } else {
                         a.min(b)
                     };
-                    self.stack.push(Value::F64(r));
+                    self.stack.push(r);
                 }
                 Op::F64Max => {
                     let a = pop_val!(self, F64);
@@ -1450,12 +1409,12 @@ impl CompiledInterpreter {
                     } else {
                         a.max(b)
                     };
-                    self.stack.push(Value::F64(r));
+                    self.stack.push(r);
                 }
                 Op::F64CopySign => binop!(self, F64, |b, a| b.copysign(a)),
                 Op::I32WrapI64 => {
                     let a = pop_val!(self, I64);
-                    self.stack.push(Value::I32(a as i32));
+                    self.stack.push(a as i32);
                 }
                 Op::I32TruncF32Signed => {
                     let a = pop_val!(self, F32);
@@ -1465,7 +1424,7 @@ impl CompiledInterpreter {
                         t >= i32::MIN as f32 && t < i32::MAX as f32,
                         "wasm trap: integer overflow"
                     );
-                    self.stack.push(Value::I32(t as i32));
+                    self.stack.push(t as i32);
                 }
                 Op::I32TruncF32Unsigned => {
                     let a = pop_val!(self, F32);
@@ -1475,7 +1434,7 @@ impl CompiledInterpreter {
                         t >= 0.0 && t < u32::MAX as f32,
                         "wasm trap: integer overflow"
                     );
-                    self.stack.push(Value::I32(t as u32 as i32));
+                    self.stack.push(t as u32 as i32);
                 }
                 Op::I32TruncF64Signed => {
                     let a = pop_val!(self, F64);
@@ -1485,7 +1444,7 @@ impl CompiledInterpreter {
                         t >= i32::MIN as f64 && t <= i32::MAX as f64,
                         "wasm trap: integer overflow"
                     );
-                    self.stack.push(Value::I32(t as i32));
+                    self.stack.push(t as i32);
                 }
                 Op::I32TruncF64Unsigned => {
                     let a = pop_val!(self, F64);
@@ -1495,15 +1454,15 @@ impl CompiledInterpreter {
                         t >= 0.0 && t <= u32::MAX as f64,
                         "wasm trap: integer overflow"
                     );
-                    self.stack.push(Value::I32(t as u32 as i32));
+                    self.stack.push(t as u32 as i32);
                 }
                 Op::I64ExtendI32Signed => {
                     let a = pop_val!(self, I32);
-                    self.stack.push(Value::I64(a as i64));
+                    self.stack.push(a as i64);
                 }
                 Op::I64ExtendI32Unsigned => {
                     let a = pop_val!(self, I32);
-                    self.stack.push(Value::I64(a as u32 as i64));
+                    self.stack.push(a as u32 as i64);
                 }
                 Op::I64TruncF32Signed => {
                     let a = pop_val!(self, F32);
@@ -1513,7 +1472,7 @@ impl CompiledInterpreter {
                         t >= i64::MIN as f32 && t < i64::MAX as f32,
                         "wasm trap: integer overflow"
                     );
-                    self.stack.push(Value::I64(t as i64));
+                    self.stack.push(t as i64);
                 }
                 Op::I64TruncF32Unsigned => {
                     let a = pop_val!(self, F32);
@@ -1523,7 +1482,7 @@ impl CompiledInterpreter {
                         t >= 0.0 && t < u64::MAX as f32,
                         "wasm trap: integer overflow"
                     );
-                    self.stack.push(Value::I64(t as u64 as i64));
+                    self.stack.push(t as u64 as i64);
                 }
                 Op::I64TruncF64Signed => {
                     let a = pop_val!(self, F64);
@@ -1533,7 +1492,7 @@ impl CompiledInterpreter {
                         t >= i64::MIN as f64 && t < i64::MAX as f64,
                         "wasm trap: integer overflow"
                     );
-                    self.stack.push(Value::I64(t as i64));
+                    self.stack.push(t as i64);
                 }
                 Op::I64TruncF64Unsigned => {
                     let a = pop_val!(self, F64);
@@ -1543,88 +1502,87 @@ impl CompiledInterpreter {
                         t >= 0.0 && t < u64::MAX as f64,
                         "wasm trap: integer overflow"
                     );
-                    self.stack.push(Value::I64(t as u64 as i64));
+                    self.stack.push(t as u64 as i64);
                 }
                 Op::F32ConvertI32Signed => {
                     let a = pop_val!(self, I32);
-                    self.stack.push(Value::F32(a as f32));
+                    self.stack.push(a as f32);
                 }
                 Op::F32ConvertI32Unsigned => {
                     let a = pop_val!(self, I32);
-                    self.stack.push(Value::F32((a as u32) as f32));
+                    self.stack.push((a as u32) as f32);
                 }
                 Op::F32ConvertI64Signed => {
                     let a = pop_val!(self, I64);
-                    self.stack.push(Value::F32(a as f32));
+                    self.stack.push(a as f32);
                 }
                 Op::F32ConvertI64Unsigned => {
                     let a = pop_val!(self, I64);
-                    self.stack.push(Value::F32((a as u64) as f32));
+                    self.stack.push((a as u64) as f32);
                 }
                 Op::F32DemoteF64 => {
                     let a = pop_val!(self, F64);
-                    self.stack.push(Value::F32(a as f32));
+                    self.stack.push(a as f32);
                 }
                 Op::F64ConvertI32Signed => {
                     let a = pop_val!(self, I32);
-                    self.stack.push(Value::F64(a as f64));
+                    self.stack.push(a as f64);
                 }
                 Op::F64ConvertI32Unsigned => {
                     let a = pop_val!(self, I32);
-                    self.stack.push(Value::F64((a as u32) as f64));
+                    self.stack.push((a as u32) as f64);
                 }
                 Op::F64ConvertI64Signed => {
                     let a = pop_val!(self, I64);
-                    self.stack.push(Value::F64(a as f64));
+                    self.stack.push(a as f64);
                 }
                 Op::F64ConvertI64Unsigned => {
                     let a = pop_val!(self, I64);
-                    self.stack.push(Value::F64((a as u64) as f64));
+                    self.stack.push((a as u64) as f64);
                 }
                 Op::F64PromoteF32 => {
                     let a = pop_val!(self, F32);
-                    self.stack.push(Value::F64(a as f64));
+                    self.stack.push(a as f64);
                 }
                 Op::I32ReinterpretF32 => {
                     let a = pop_val!(self, F32);
-                    self.stack.push(Value::I32(a.to_bits() as i32));
+                    self.stack.push(a.to_bits() as i32);
                 }
                 Op::I64ReinterpretF64 => {
                     let a = pop_val!(self, F64);
-                    self.stack.push(Value::I64(a.to_bits() as i64));
+                    self.stack.push(a.to_bits() as i64);
                 }
                 Op::F32ReinterpretI32 => {
                     let a = pop_val!(self, I32);
-                    self.stack.push(Value::F32(f32::from_bits(a as u32)));
+                    self.stack.push(f32::from_bits(a as u32));
                 }
                 Op::F64ReinterpretI64 => {
                     let a = pop_val!(self, I64);
-                    self.stack.push(Value::F64(f64::from_bits(a as u64)));
+                    self.stack.push(f64::from_bits(a as u64));
                 }
                 Op::I32Extend8Signed => {
                     let a = pop_val!(self, I32);
-                    self.stack.push(Value::I32((a as i8) as i32));
+                    self.stack.push((a as i8) as i32);
                 }
                 Op::I32Extend16Signed => {
                     let a = pop_val!(self, I32);
-                    self.stack.push(Value::I32((a as i16) as i32));
+                    self.stack.push((a as i16) as i32);
                 }
                 Op::I64Extend8Signed => {
                     let a = pop_val!(self, I64);
-                    self.stack.push(Value::I64((a as i8) as i64));
+                    self.stack.push((a as i8) as i64);
                 }
                 Op::I64Extend16Signed => {
                     let a = pop_val!(self, I64);
-                    self.stack.push(Value::I64((a as i16) as i64));
+                    self.stack.push((a as i16) as i64);
                 }
                 Op::I64Extend32Signed => {
                     let a = pop_val!(self, I64);
-                    self.stack.push(Value::I64((a as i32) as i64));
+                    self.stack.push((a as i32) as i64);
                 }
                 Op::I32TruncSaturatedF32Signed => {
                     let a = pop_val!(self, F32);
-                    self.stack
-                        .push(Value::I32(if a.is_nan() { 0 } else { a as i32 }));
+                    self.stack.push(if a.is_nan() { 0 } else { a as i32 });
                 }
                 Op::I32TruncSaturatedF32Unsigned => {
                     let a = pop_val!(self, F32);
@@ -1633,7 +1591,7 @@ impl CompiledInterpreter {
                     } else {
                         a as u32
                     };
-                    self.stack.push(Value::I32(r as i32));
+                    self.stack.push(r as i32);
                 }
                 Op::I32TruncSaturatedF64Signed => {
                     let a = pop_val!(self, F64);
@@ -1646,7 +1604,7 @@ impl CompiledInterpreter {
                     } else {
                         a as i32
                     };
-                    self.stack.push(Value::I32(r));
+                    self.stack.push(r);
                 }
                 Op::I32TruncSaturatedF64Unsigned => {
                     let a = pop_val!(self, F64);
@@ -1657,7 +1615,7 @@ impl CompiledInterpreter {
                     } else {
                         a as u32
                     };
-                    self.stack.push(Value::I32(r as i32));
+                    self.stack.push(r as i32);
                 }
                 Op::I64TruncSaturatedF32Signed => {
                     let a = pop_val!(self, F32);
@@ -1670,7 +1628,7 @@ impl CompiledInterpreter {
                     } else {
                         a as i64
                     };
-                    self.stack.push(Value::I64(r));
+                    self.stack.push(r);
                 }
                 Op::I64TruncSaturatedF32Unsigned => {
                     let a = pop_val!(self, F32);
@@ -1681,7 +1639,7 @@ impl CompiledInterpreter {
                     } else {
                         a as u64
                     };
-                    self.stack.push(Value::I64(r as i64));
+                    self.stack.push(r as i64);
                 }
                 Op::I64TruncSaturatedF64Signed => {
                     let a = pop_val!(self, F64);
@@ -1694,7 +1652,7 @@ impl CompiledInterpreter {
                     } else {
                         a as i64
                     };
-                    self.stack.push(Value::I64(r));
+                    self.stack.push(r);
                 }
                 Op::I64TruncSaturatedF64Unsigned => {
                     let a = pop_val!(self, F64);
@@ -1705,7 +1663,7 @@ impl CompiledInterpreter {
                     } else {
                         a as u64
                     };
-                    self.stack.push(Value::I64(r as i64));
+                    self.stack.push(r as i64);
                 }
                 _ => todo!(),
             }
@@ -1751,11 +1709,14 @@ impl CompiledInterpreter {
         }
         ops.push(Op::Return);
 
+        let max_stack_height = ops.len() as u32;
+
         let cf = CompiledFunction {
             ops,
             type_index: 0,
             num_args: 0,
             local_types: vec![],
+            max_stack_height,
         };
 
         let compiled_func_idx = self.compiled.functions.len();
@@ -1815,22 +1776,25 @@ fn eval_const_expr_with_module(
     expr: &[Instruction],
     store: &Store,
     module: &ModuleInstance,
-) -> Result<Value> {
-    let mut stack: Vec<Value> = Vec::with_capacity(expr.len());
+) -> Result<RawValue> {
+    let mut stack = Vec::with_capacity(expr.len());
     for instr in expr {
         match instr {
-            Instruction::I32Const(v) => stack.push(Value::I32(*v)),
-            Instruction::I64Const(v) => stack.push(Value::I64(*v)),
-            Instruction::F32Const(v) => stack.push(Value::F32(*v)),
-            Instruction::F64Const(v) => stack.push(Value::F64(*v)),
-            Instruction::V128Const(v) => stack.push(Value::V128(*v)),
-            Instruction::RefNull(_) => stack.push(Value::Ref(Ref::Null)),
+            Instruction::I32Const(v) => stack.push(RawValue::from(*v)),
+            Instruction::I64Const(v) => stack.push(RawValue::from(*v)),
+            Instruction::F32Const(v) => stack.push(RawValue::from(*v)),
+            Instruction::F64Const(v) => stack.push(RawValue::from(*v)),
+            Instruction::V128Const(v) => {
+                let (hi, lo) = RawValue::from_v128(*v);
+                stack.extend([hi, lo]);
+            }
+            Instruction::RefNull(_) => stack.push(RawValue::from_ref(Ref::Null)),
             Instruction::RefFunc(idx) => {
                 let addr = *module
                     .function_addrs
                     .get(*idx as usize)
                     .ok_or_else(|| anyhow!("ref.func index {} oob", idx))?;
-                stack.push(Value::Ref(Ref::FunctionAddr(addr)));
+                stack.push(RawValue::from_ref(Ref::FunctionAddr(addr)));
             }
             Instruction::GlobalGet(idx) => {
                 let store_idx = *module
@@ -1845,31 +1809,31 @@ fn eval_const_expr_with_module(
             }
             Instruction::RefI31 => {
                 let v = const_pop_i32(&mut stack)?;
-                stack.push(Value::Ref(Ref::I31(v & 0x7FFF_FFFF)));
+                stack.push(RawValue::from_ref(Ref::I31(v & 0x7FFF_FFFF)));
             }
             Instruction::I32Add => {
                 let (b, a) = (const_pop_i32(&mut stack)?, const_pop_i32(&mut stack)?);
-                stack.push(Value::I32(a.wrapping_add(b)));
+                stack.push(RawValue::from(a.wrapping_add(b)));
             }
             Instruction::I32Sub => {
                 let (b, a) = (const_pop_i32(&mut stack)?, const_pop_i32(&mut stack)?);
-                stack.push(Value::I32(a.wrapping_sub(b)));
+                stack.push(RawValue::from(a.wrapping_sub(b)));
             }
             Instruction::I32Mul => {
                 let (b, a) = (const_pop_i32(&mut stack)?, const_pop_i32(&mut stack)?);
-                stack.push(Value::I32(a.wrapping_mul(b)));
+                stack.push(RawValue::from(a.wrapping_mul(b)));
             }
             Instruction::I64Add => {
                 let (b, a) = (const_pop_i64(&mut stack)?, const_pop_i64(&mut stack)?);
-                stack.push(Value::I64(a.wrapping_add(b)));
+                stack.push(RawValue::from(a.wrapping_add(b)));
             }
             Instruction::I64Sub => {
                 let (b, a) = (const_pop_i64(&mut stack)?, const_pop_i64(&mut stack)?);
-                stack.push(Value::I64(a.wrapping_sub(b)));
+                stack.push(RawValue::from(a.wrapping_sub(b)));
             }
             Instruction::I64Mul => {
                 let (b, a) = (const_pop_i64(&mut stack)?, const_pop_i64(&mut stack)?);
-                stack.push(Value::I64(a.wrapping_mul(b)));
+                stack.push(RawValue::from(a.wrapping_mul(b)));
             }
             other => bail!("unexpected instruction in const expr: {:?}", other),
         }
@@ -1879,22 +1843,16 @@ fn eval_const_expr_with_module(
         .ok_or_else(|| anyhow!("const expr produced no value"))
 }
 
-fn const_pop_i32(stack: &mut Vec<Value>) -> Result<i32> {
-    match stack
+fn const_pop_i32(stack: &mut Vec<RawValue>) -> Result<i32> {
+    stack
         .pop()
-        .ok_or_else(|| anyhow!("stack underflow in const expr"))?
-    {
-        Value::I32(v) => Ok(v),
-        other => bail!("expected i32 in const expr, got {:?}", other),
-    }
+        .map(|v| v.as_i32())
+        .ok_or_else(|| anyhow!("stack underflow in const expr"))
 }
 
-fn const_pop_i64(stack: &mut Vec<Value>) -> Result<i64> {
-    match stack
+fn const_pop_i64(stack: &mut Vec<RawValue>) -> Result<i64> {
+    stack
         .pop()
-        .ok_or_else(|| anyhow!("stack underflow in const expr"))?
-    {
-        Value::I64(v) => Ok(v),
-        other => bail!("expected i64 in const expr, got {:?}", other),
-    }
+        .map(|v| v.as_i64())
+        .ok_or_else(|| anyhow!("stack underflow in const expr"))
 }

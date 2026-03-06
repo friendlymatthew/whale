@@ -28,6 +28,7 @@ struct Compiler<'a> {
     ops: Vec<Op>,
     block_stack: Vec<BlockContext>,
     stack_height: i32,
+    max_stack_height: i32,
     v128_constants: Vec<i128>,
     jump_tables: Vec<Vec<JumpTableEntry>>,
     shuffle_masks: Vec<[u8; 16]>,
@@ -71,6 +72,7 @@ pub fn compile(module: &Module) -> CompiledModule {
                 v128_constants: std::mem::take(&mut v128_constants),
                 jump_tables: std::mem::take(&mut jump_tables),
                 shuffle_masks: std::mem::take(&mut shuffle_masks),
+                max_stack_height: 0,
             };
             let cf = compiler.compile_function(f);
 
@@ -112,6 +114,7 @@ pub fn compile_function_into(
         v128_constants: std::mem::take(&mut module.v128_constants),
         jump_tables: std::mem::take(&mut module.jump_tables),
         shuffle_masks: std::mem::take(&mut module.shuffle_masks),
+        max_stack_height: 0,
     };
     let cf = compiler.compile_function(func);
     module.v128_constants = compiler.v128_constants;
@@ -190,6 +193,7 @@ impl<'a> Compiler<'a> {
             type_index: func.type_index,
             num_args: num_args as u32,
             local_types,
+            max_stack_height: self.max_stack_height as u32,
         }
     }
 
@@ -2351,5 +2355,7 @@ impl<'a> Compiler<'a> {
             Instruction::I31GetSigned => todo!(),
             Instruction::I31GetUnsigned => todo!(),
         }
+
+        self.max_stack_height = self.max_stack_height.max(self.stack_height);
     }
 }
