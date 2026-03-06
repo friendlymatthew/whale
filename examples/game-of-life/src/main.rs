@@ -1,5 +1,5 @@
-use anyhow::{bail, Context, Result};
-use gabagool::{CompiledInterpreter, Value};
+use anyhow::{Context, Result};
+use gabagool::{CompiledInterpreter, RawValue};
 use minifb::{Key, Window, WindowOptions};
 use std::time::{Duration, Instant};
 
@@ -11,9 +11,7 @@ const PALETTE_NAMES: &[&str] = &["amber", "green", "blue", "pink", "white"];
 fn call_i32(interpreter: &mut CompiledInterpreter, name: &str) -> Result<i32> {
     let result = interpreter.invoke(name, vec![])?;
 
-    let Value::I32(v) = result.into_completed()?[0] else {
-        bail!("expected i32");
-    };
+    let v = result.into_completed()?[0].as_i32();
 
     Ok(v)
 }
@@ -114,7 +112,7 @@ fn main() -> Result<()> {
             //     eprintln!("snapshot error: {e}");
             // }
             palette = (palette + 1) % PALETTE_NAMES.len();
-            interpreter.invoke("set_palette", vec![Value::I32(palette as i32)])?;
+            interpreter.invoke("set_palette", vec![RawValue::from(palette as i32)])?;
             println!("Palette: {}", PALETTE_NAMES[palette]);
             interpreter.invoke("render", vec![])?;
         }
