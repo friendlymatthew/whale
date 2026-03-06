@@ -45,7 +45,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 `gabagool` is tested against the [WebAssembly spec test suite](https://github.com/WebAssembly/spec/tree/main/test/core).
 
-1,681 tests pass out of 2,058 (82%). `gabagool` passes on arithmetic, control flow, memory, tables, globals, function references, and imports/exports. It _currently_ fails on garbage collection, exceptions, and tail calls.
+1,686 tests pass out of 2,049 (82%). `gabagool` passes on arithmetic, control flow, memory, tables, globals, function references, and imports/exports. It _currently_ fails on garbage collection, exceptions, and tail calls.
 
 Our testing harness uses modules from the test suite that cover execution, traps, resource exhaustion, and rejection (modules that should fail to parse or instantiate). We omit validation, cross-module invocation, and SIMD modules.
 

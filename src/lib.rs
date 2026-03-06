@@ -1,25 +1,17 @@
 #![warn(clippy::nursery)]
 
-pub use binary_grammar::{
-    AddrType, CompositeType, FunctionType, GlobalType, ImportDescription, Limit, MemoryType,
-    Mutability, RefType, TableType, ValueType,
-};
-
-pub use execution_grammar::{
-    ExportInstance, ExternalValue, FunctionInstance, GlobalInstance, MemoryInstance, Ref,
-    TableInstance, Value,
-};
-pub use interpreter::{ExecutionState, Interpreter};
-pub use parser::*;
-pub use store::*;
-
-pub(crate) mod binary_grammar;
-pub(crate) mod execution_grammar;
-#[macro_use]
-mod numerics;
-#[macro_use]
-mod memory;
-mod interpreter;
+mod binary_grammar;
+pub mod compiled_interpreter;
+pub mod compiler;
+mod execution_grammar;
+pub mod ir;
 pub mod leb128;
-mod parser;
+pub mod parser;
 mod store;
+pub mod value_stack;
+
+pub use compiled_interpreter::*;
+
+pub use binary_grammar::*;
+pub use execution_grammar::*;
+pub use store::*;

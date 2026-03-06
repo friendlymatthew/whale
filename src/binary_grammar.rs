@@ -1,8 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-/// The maximum length of a string.
-pub const MAX_STRING_SIZE: usize = 100000;
-
 /// The 4-byte preamble that starts at the top of the encoded module.
 pub const MAGIC_NUMBER: [u8; 4] = *b"\0asm";
 
@@ -41,7 +38,7 @@ pub struct Module {
 }
 
 impl Module {
-    pub fn new(version: u8) -> Self {
+    pub const fn new(version: u8) -> Self {
         Self {
             version,
             types: vec![],

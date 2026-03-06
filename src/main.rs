@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
+use gabagool::{CompiledInterpreter, Value, ValueType};
 use std::fs;
 use std::path::PathBuf;
-use gabagool::{Interpreter, Value, ValueType};
 
 fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
@@ -17,7 +17,7 @@ fn main() -> Result<()> {
     let wasm_file = PathBuf::from(&wasm_file);
     let wasm_bytes = fs::read(&wasm_file)?;
 
-    let mut interpreter = Interpreter::new(&wasm_bytes)?;
+    let mut interpreter = CompiledInterpreter::new(&wasm_bytes)?;
 
     let param_types = interpreter.get_param_types(&func_name)?;
 

@@ -1,14 +1,11 @@
 use std::fmt::{Debug, Formatter};
 use std::rc::Rc;
 
-use anyhow::{anyhow, bail, ensure, Result};
+use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    binary_grammar::{
-        Function, FunctionType, GlobalType, MemoryType, RefType, SubType, TableType, ValueType,
-    },
-    AddrType,
+use crate::binary_grammar::{
+    Function, FunctionType, GlobalType, MemoryType, RefType, SubType, TableType, ValueType,
 };
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -69,12 +66,7 @@ try_from_value!(I64, i64);
 try_from_value!(F32, f32);
 try_from_value!(F64, f64);
 try_from_value!(V128, i128);
-
-#[derive(Debug)]
-pub enum ResultKind {
-    Values(Vec<Value>),
-    Trap,
-}
+try_from_value!(Ref, Ref);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModuleInstance {
@@ -226,33 +218,6 @@ pub struct DataInstance {
     pub data: Vec<u8>,
 }
 
-pub enum ImportValue {
-    // Wrap in Box to convert a dynamically sized type into one with a statically known
-    // type.
-    Func(Box<dyn Fn()>),
-    Table(Vec<Ref>),
-    Memory(Vec<u8>),
-    Global(Value),
-}
-
-impl Debug for ImportValue {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Func(_) => f.debug_tuple("ImportValue Function").finish(),
-            Self::Table(t) => f.debug_tuple("Import Value Table").field(t).finish(),
-            Self::Memory(m) => f.debug_tuple("Import Value Memory").field(m).finish(),
-            Self::Global(g) => f.debug_tuple("Import Value Global").field(g).finish(),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct ExternalImport {
-    pub module: String,
-    pub name: String,
-    pub value: ImportValue,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ExternalValue {
     Function { addr: usize },
@@ -266,165 +231,4 @@ pub enum ExternalValue {
 pub struct ExportInstance {
     pub name: String,
     pub value: ExternalValue,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Label {
-    pub arity: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Frame {
-    pub arity: usize,
-    pub locals: Vec<Value>,
-    pub module: Rc<ModuleInstance>,
-}
-
-impl Default for Frame {
-    fn default() -> Self {
-        Self {
-            arity: 0,
-            locals: vec![],
-            module: Rc::new(ModuleInstance::default()),
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub enum Entry {
-    Value(Value),
-    Label(Label),
-    Activation(Frame),
-}
-
-impl From<Label> for Entry {
-    fn from(value: Label) -> Self {
-        Self::Label(value)
-    }
-}
-
-impl From<Frame> for Entry {
-    fn from(value: Frame) -> Self {
-        Self::Activation(value)
-    }
-}
-
-impl<V: Into<Value>> From<V> for Entry {
-    fn from(value: V) -> Self {
-        Self::Value(value.into())
-    }
-}
-
-#[derive(Debug, Default, Serialize, Deserialize)]
-pub struct Stack(Vec<Entry>);
-
-impl Stack {
-    pub fn push<E: Into<Entry>>(&mut self, entry: E) {
-        self.0.push(entry.into());
-    }
-
-    pub fn push_address(&mut self, address: usize, addr_type: AddrType) {
-        match addr_type {
-            AddrType::I32 => self.push(address as i32),
-            AddrType::I64 => self.push(address as i64),
-        }
-    }
-
-    pub fn extend<E: Into<Entry>, I: IntoIterator<Item = E>>(&mut self, iter: I) {
-        self.0.extend(iter.into_iter().map(Into::into));
-    }
-
-    pub fn pop(&mut self) -> Result<Entry> {
-        self.0.pop().ok_or_else(|| anyhow!("oob"))
-    }
-
-    pub fn pop_value(&mut self) -> Result<Value> {
-        match self.pop()? {
-            Entry::Value(v) => Ok(v),
-            foreign => bail!("not value, got: {:?}", foreign),
-        }
-    }
-
-    pub fn pop_address(&mut self, addr_type: AddrType) -> Result<usize> {
-        let value = self.pop_value()?;
-
-        match (value, addr_type) {
-            (Value::I32(a), AddrType::I32) => Ok(a as usize),
-            (Value::I64(a), AddrType::I64) => Ok(a as usize),
-            foreign => bail!("expected {addr_type:?} table index, got: {foreign:?}"),
-        }
-    }
-
-    pub fn pop_n(&mut self, len: usize) -> Result<Vec<Entry>> {
-        ensure!(
-            self.len() >= len,
-            "stack must have at least {} entries",
-            len
-        );
-        Ok(self.0.split_off(self.len() - len))
-    }
-
-    pub fn pop_array<const N: usize>(&mut self) -> Result<[Entry; N]> {
-        let out = self.pop_n(N)?;
-
-        Ok(out.try_into().unwrap())
-    }
-
-    pub const fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    pub fn clear(&mut self) {
-        self.0.clear();
-    }
-
-    pub fn pop_to_label(&mut self, depth: u32) -> Result<u32> {
-        let mut label_count = 0;
-        let mut label_idx = None;
-
-        for i in (0..self.0.len()).rev() {
-            if let Entry::Label(_) = &self.0[i] {
-                if label_count == depth {
-                    label_idx = Some(i);
-                    break;
-                }
-                label_count += 1;
-            }
-        }
-
-        let label_idx = label_idx.ok_or_else(|| anyhow!("label depth {} not found", depth))?;
-        let arity = match &self.0[label_idx] {
-            Entry::Label(l) => l.arity,
-            _ => unreachable!(),
-        };
-
-        let values = self.pop_n(arity as usize)?;
-        self.0.truncate(label_idx);
-        self.extend(values);
-
-        Ok(arity)
-    }
-
-    pub fn pop_to_label_with_arity(&mut self, depth: u32, arity: usize) -> Result<()> {
-        let mut label_count = 0;
-        let mut label_idx = None;
-
-        for i in (0..self.0.len()).rev() {
-            if let Entry::Label(_) = &self.0[i] {
-                if label_count == depth {
-                    label_idx = Some(i);
-                    break;
-                }
-                label_count += 1;
-            }
-        }
-
-        let label_idx = label_idx.ok_or_else(|| anyhow!("label depth {} not found", depth))?;
-
-        let values = self.pop_n(arity)?;
-        self.0.truncate(label_idx);
-        self.extend(values);
-
-        Ok(())
-    }
 }

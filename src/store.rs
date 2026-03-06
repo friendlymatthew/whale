@@ -78,7 +78,7 @@ impl Store {
         Ok(f_address)
     }
 
-    fn allocate_host_function(
+    fn _allocate_host_function(
         &mut self,
         h_f: Box<dyn Fn()>,
         f_idx: u32,

@@ -156,7 +156,7 @@ mod spec_tests {
                                         "    let wasm_bytes: &[u8] = include_bytes!(concat!(env!(\"OUT_DIR\"), \"/wasm/trap_module_{file}_{idx}.wasm\"));\n",
                                         "    let mut store = Store::new();\n",
                                         "    let imports = setup_spectest_imports(&mut store, wasm_bytes);\n",
-                                        "    let result = Interpreter::instantiate(store, wasm_bytes, imports);\n",
+                                        "    let result = CompiledInterpreter::instantiate(store, wasm_bytes, imports);\n",
                                         "    assert!(result.is_err(), \"expected module instantiation to trap, but it succeeded\");\n",
                                         "}}\n",
                                     ),
@@ -256,7 +256,7 @@ mod spec_tests {
                                 "    let wasm_bytes: &[u8] = include_bytes!(concat!(env!(\"OUT_DIR\"), \"/wasm/unlinkable_{file}_{idx}.wasm\"));\n",
                                 "    let mut store = Store::new();\n",
                                 "    let imports = setup_spectest_imports(&mut store, wasm_bytes);\n",
-                                "    let result = Interpreter::instantiate(store, wasm_bytes, imports);\n",
+                                "    let result = CompiledInterpreter::instantiate(store, wasm_bytes, imports);\n",
                                 "    assert!(result.is_err(), \"expected unlinkable module to fail instantiation, but it succeeded\");\n",
                                 "}}\n",
                             ),
@@ -314,7 +314,7 @@ mod spec_tests {
                             concat!(
                                 "    let prereq_wasm_{pidx}: &[u8] = include_bytes!(concat!(env!(\"OUT_DIR\"), \"/wasm/{file}_{pidx}.wasm\"));\n",
                                 "    let prereq_imports_{pidx} = setup_spectest_imports(&mut store, prereq_wasm_{pidx});\n",
-                                "    let prereq_interp_{pidx} = Interpreter::instantiate(store, prereq_wasm_{pidx}, prereq_imports_{pidx}).unwrap();\n",
+                                "    let prereq_interp_{pidx} = CompiledInterpreter::instantiate(store, prereq_wasm_{pidx}, prereq_imports_{pidx}).unwrap();\n",
                                 "    let prereq_exports_{pidx}: Vec<ExportInstance> = prereq_interp_{pidx}.module_exports().to_vec();\n",
                                 "    store = prereq_interp_{pidx}.into_store();\n",
                             ),
@@ -352,7 +352,7 @@ mod spec_tests {
                         "    let wasm_bytes: &[u8] = include_bytes!(concat!(env!(\"OUT_DIR\"), \"/wasm/{file}_{midx}.wasm\"));\n",
                         "    let mut store = Store::new();\n",
                         "{setup}",
-                        "    let mut interp = Interpreter::instantiate(store, wasm_bytes, imports).unwrap();\n",
+                        "    let mut interp = CompiledInterpreter::instantiate(store, wasm_bytes, imports).unwrap();\n",
                         "    let mut failures: Vec<String> = Vec::new();\n",
                         "{steps}\n",
                         "    if !failures.is_empty() {{\n",
@@ -366,6 +366,7 @@ mod spec_tests {
                     setup = setup_code,
                     steps = steps_code,
                 ));
+
             }
         }
 

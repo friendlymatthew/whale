@@ -1,7 +1,7 @@
 use gabagool::{
-    AddrType, CompositeType, ExportInstance, ExternalValue, FunctionInstance, GlobalInstance,
-    GlobalType, ImportDescription, Interpreter, Limit, MemoryInstance, MemoryType, Parser, Ref,
-    Store, Value, ValueType,
+    parser::Parser, AddrType, CompositeType, CompiledInterpreter, ExportInstance, ExternalValue,
+    FunctionInstance, GlobalInstance, GlobalType, ImportDescription, Limit,
+    MemoryInstance, MemoryType, Ref, Store, Value, ValueType,
 };
 
 #[derive(Debug)]
@@ -102,7 +102,7 @@ fn setup_spectest_imports(store: &mut Store, wasm_bytes: &[u8]) -> Vec<ExternalV
 }
 
 fn spec_step_assert_return(
-    interp: &mut Interpreter,
+    interp: &mut CompiledInterpreter,
     name: &str,
     args: &[Value],
     expected: &[ExpectedValue],
@@ -131,7 +131,7 @@ fn spec_step_assert_return(
 }
 
 fn spec_step_assert_trap(
-    interp: &mut Interpreter,
+    interp: &mut CompiledInterpreter,
     name: &str,
     args: &[Value],
     step: usize,
@@ -148,7 +148,7 @@ fn spec_step_assert_trap(
     }
 }
 
-fn spec_step_invoke(interp: &mut Interpreter, name: &str, args: &[Value]) {
+fn spec_step_invoke(interp: &mut CompiledInterpreter, name: &str, args: &[Value]) {
     let _ = interp.invoke(name, args.to_vec());
 }
 
@@ -241,11 +241,10 @@ fn resolve_imports_with_registered(
                 }
                 ImportDescription::Func(type_idx) => {
                     let addr = store.functions.len();
-                    let function_type =
-                        match &module.types[*type_idx as usize].composite_type {
-                            CompositeType::Func(ft) => ft.clone(),
-                            _ => panic!("expected function type at index {}", type_idx),
-                        };
+                    let function_type = match &module.types[*type_idx as usize].composite_type {
+                        CompositeType::Func(ft) => ft.clone(),
+                        _ => panic!("expected function type at index {}", type_idx),
+                    };
                     store.functions.push(FunctionInstance::Host {
                         function_type,
                         code: Box::new(|| {}),
