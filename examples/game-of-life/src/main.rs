@@ -1,6 +1,7 @@
 use gabagool::{Instance, Module, RawValue, Store};
 use softbuffer::Surface;
 use std::num::NonZeroU32;
+use std::process::Command;
 use std::rc::Rc;
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, KeyEvent, MouseButton, WindowEvent};
@@ -9,7 +10,7 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::Window;
 
 const CELL_PX: usize = 8;
-// const SNAPSHOT_FILE: &str = "game-of-life.gabagool";
+const SNAPSHOT_FILE: &str = "game-of-life.gabagool";
 
 const PALETTE_NAMES: &[&str] = &["amber", "green", "blue", "pink", "white"];
 
@@ -25,47 +26,47 @@ fn read_framebuf(store: &Store, ptr: usize, len: usize) -> &[u32] {
     unsafe { std::slice::from_raw_parts(bytes.as_ptr() as *const u32, len) }
 }
 
-// TODO: re-enable when snapshot feature lands
-// fn save_snapshot(store: &Store, path: &str) {
-//     let bytes = store.snapshot();
-//     if let Err(e) = std::fs::write(path, &bytes) {
-//         eprintln!("failed to write snapshot: {e}");
-//     } else {
-//         println!("Snapshot saved to {path} ({} bytes)", bytes.len());
-//     }
-// }
-//
-// fn fork_snapshot(store: &Store, fork_count: u32) {
-//     let bytes = store.snapshot();
-//
-//     let id = std::time::SystemTime::now()
-//         .duration_since(std::time::UNIX_EPOCH)
-//         .unwrap()
-//         .as_millis();
-//
-//     let path = format!("game-of-life-{id}.gabagool");
-//     if let Err(e) = std::fs::write(&path, &bytes) {
-//         eprintln!("fork snapshot error: {e}");
-//         return;
-//     }
-//
-//     let exe = std::env::current_exe().expect("failed to get current exe");
-//     if let Err(e) = std::process::Command::new(exe)
-//         .arg("--restore")
-//         .arg(&path)
-//         .arg("--offset")
-//         .arg(fork_count.to_string())
-//         .spawn()
-//     {
-//         eprintln!("failed to fork: {e}");
-//     }
-// }
+fn save_snapshot(store: &Store, path: &str) {
+    let bytes = store.snapshot();
+    if let Err(e) = std::fs::write(path, &bytes) {
+        eprintln!("failed to write snapshot: {e}");
+    } else {
+        println!("Snapshot saved to {path} ({} bytes)", bytes.len());
+    }
+}
+
+fn fork_snapshot(store: &Store, parent_x: i32, parent_y: i32) {
+    let bytes = store.snapshot();
+
+    let id = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
+
+    let path = format!("game-of-life-{id}.gabagool");
+    if let Err(e) = std::fs::write(&path, &bytes) {
+        eprintln!("fork snapshot error: {e}");
+        return;
+    }
+
+    let exe = std::env::current_exe().expect("failed to get current exe");
+    if let Err(e) = Command::new(exe)
+        .arg("--restore")
+        .arg(&path)
+        .arg("--pos")
+        .arg(format!("{},{}", parent_x + 400, parent_y + 400))
+        .spawn()
+    {
+        eprintln!("failed to fork: {e}");
+    }
+}
 
 struct App {
     store: Store,
     instance: Instance,
     framebuf_ptr: usize,
     win_size: usize,
+    win_pos: Option<(i32, i32)>,
     paused: bool,
     palette: usize,
     cursor_pos: (f64, f64),
@@ -107,12 +108,15 @@ impl ApplicationHandler for App {
         }
 
         let size = winit::dpi::PhysicalSize::new(self.win_size as u32, self.win_size as u32);
-        let attrs = Window::default_attributes()
+        let mut attrs = Window::default_attributes()
             .with_title("Game of Life")
             .with_inner_size(size)
             .with_min_inner_size(size)
             .with_max_inner_size(size)
             .with_resizable(false);
+        if let Some((x, y)) = self.win_pos {
+            attrs = attrs.with_position(winit::dpi::PhysicalPosition::new(x, y));
+        }
 
         let window = Rc::new(event_loop.create_window(attrs).unwrap());
 
@@ -155,17 +159,19 @@ impl ApplicationHandler for App {
                     println!("{}", if self.paused { "Paused" } else { "Resumed" });
                 }
                 KeyCode::KeyS => {
+                    save_snapshot(&self.store, SNAPSHOT_FILE);
                     if let Ok(idx) = call_i32(&mut self.store, self.instance, "cycle_palette") {
                         self.palette = idx as usize;
                         println!("Palette: {}", PALETTE_NAMES[self.palette]);
                     }
                     self.blit();
                 }
-                // TODO: re-enable when snapshot feature lands
-                // KeyCode::KeyF => {
-                //     self.fork_count += 1;
-                //     fork_snapshot(&self.store, self.fork_count);
-                // }
+                KeyCode::KeyF => {
+                    if let Some(w) = &self.window {
+                        let pos = w.outer_position().unwrap_or_default();
+                        fork_snapshot(&self.store, pos.x, pos.y);
+                    }
+                }
                 _ => {}
             },
             WindowEvent::CursorMoved { position, .. } => {
@@ -205,11 +211,34 @@ impl ApplicationHandler for App {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let wasm_bytes = include_bytes!("../wasm/game.wasm");
-    let module = Module::new(wasm_bytes)?;
-    let mut store = Store::new();
-    let instance = store.instantiate(&module, vec![])?;
-    store.invoke(instance, "init", vec![])?;
+    let args: Vec<String> = std::env::args().collect();
+    let restore_path = args
+        .iter()
+        .position(|a| a == "--restore")
+        .and_then(|i| args.get(i + 1).map(|s| s.as_str()));
+    let win_pos: Option<(i32, i32)> = args
+        .iter()
+        .position(|a| a == "--pos")
+        .and_then(|i| {
+            let s = args.get(i + 1)?;
+            let (x, y) = s.split_once(',')?;
+            Some((x.parse().ok()?, y.parse().ok()?))
+        });
+
+    let (mut store, instance) = if let Some(path) = restore_path {
+        let bytes = std::fs::read(path)?;
+        let store = Store::from_snapshot(&bytes);
+        let instance = store.instance(0);
+        println!("Restored from {path}");
+        (store, instance)
+    } else {
+        let wasm_bytes = include_bytes!("../wasm/game.wasm");
+        let module = Module::new(wasm_bytes)?;
+        let mut store = Store::new();
+        let instance = store.instantiate(&module, vec![])?;
+        store.invoke(instance, "init", vec![])?;
+        (store, instance)
+    };
 
     let grid_size = call_i32(&mut store, instance, "get_grid_size")? as usize;
     let win_size = grid_size * CELL_PX;
@@ -222,6 +251,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         instance,
         framebuf_ptr,
         win_size,
+        win_pos,
         paused: false,
         palette: 0,
         cursor_pos: (0.0, 0.0),
@@ -229,6 +259,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         window: None,
         surface: None,
     };
+
     let event_loop = EventLoop::new()?;
     event_loop.run_app(&mut app)?;
 

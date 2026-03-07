@@ -128,4 +128,18 @@ impl ValueStack {
     fn get_slice(&self, range: Range<usize>) -> &[RawValue] {
         unsafe { self.inner.get_unchecked(range) }
     }
+
+    pub fn snapshot_data(&self) -> (&[RawValue], usize) {
+        (&self.inner[..self.cursor], self.cursor)
+    }
+
+    pub fn from_snapshot(data: Vec<RawValue>, cursor: usize) -> Self {
+        let capacity = data.len().max(1024);
+        let mut inner = vec![RawValue::default(); capacity];
+        inner[..data.len()].copy_from_slice(&data);
+        Self {
+            inner: inner.into_boxed_slice(),
+            cursor,
+        }
+    }
 }

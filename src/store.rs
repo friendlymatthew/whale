@@ -12,13 +12,14 @@ use crate::{
 
 use crate::binary_grammar::{
     CompositeType, DataSegment, ElementSegment, ExportDescription, Function, FunctionType, Global,
-    MemoryType, ParsedModule, SubType, TableType, ValueType,
+    GlobalType, MemoryType, ParsedModule, RefType, SubType, TableType, ValueType,
 };
 use crate::execution_grammar::{
     AddressMap, DataInstance, ElementInstance, ExportInstance, ExternalValue, FunctionInstance,
     GlobalInstance, MemoryInstance, Ref, TableInstance, TagInstance,
 };
 use crate::ir::{CompiledFunction, Op};
+use crate::snapshot::{decode_bulk, encode_bulk, Snapshot, SNAPSHOT_MAGIC, SNAPSHOT_VERSION};
 use crate::value_stack::ValueStack;
 use crate::RawValue;
 
@@ -203,6 +204,11 @@ impl Store {
             instances: vec![],
             func_addr_to_module: vec![],
         }
+    }
+
+    pub fn instance(&self, index: usize) -> Instance {
+        assert!(index < self.instances.len(), "instance index out of bounds");
+        Instance(index)
     }
 
     pub fn exports(&self, instance: Instance) -> &[ExportInstance] {
@@ -2204,4 +2210,215 @@ fn const_pop_i64(stack: &mut Vec<RawValue>) -> Result<i64> {
         .pop()
         .map(|v| v.as_i64())
         .ok_or_else(|| Error::Instantiation("stack underflow in const expr".into()))
+}
+
+impl Store {
+    pub fn snapshot(&self) -> Vec<u8> {
+        let mut buf = Vec::new();
+
+        buf.extend_from_slice(SNAPSHOT_MAGIC);
+        SNAPSHOT_VERSION.encode(&mut buf);
+
+        // encode the function type per entry
+        (self.functions.len() as u32).encode(&mut buf);
+        for fi in &self.functions {
+            match fi {
+                FunctionInstance::Local { function_type, .. } => {
+                    0u8.encode(&mut buf);
+                    function_type.encode(&mut buf);
+                }
+                FunctionInstance::Host { .. } => {
+                    todo!("how do we wowrk around host functions?")
+                }
+            }
+        }
+
+        // tables
+        (self.tables.len() as u32).encode(&mut buf);
+        for table in &self.tables {
+            table.table_type.encode(&mut buf);
+            table.elem.encode(&mut buf);
+        }
+
+        // memories
+        (self.memories.len() as u32).encode(&mut buf);
+        for mem in &self.memories {
+            mem.memory_type.encode(&mut buf);
+            (mem.data.len() as u64).encode(&mut buf);
+            buf.extend_from_slice(&mem.data);
+        }
+
+        // globals
+        (self.globals.len() as u32).encode(&mut buf);
+        for g in &self.globals {
+            g.global_type.encode(&mut buf);
+            g.value.encode(&mut buf);
+        }
+
+        // tags
+        (self.tags.len() as u32).encode(&mut buf);
+        for t in &self.tags {
+            t.tag_type.encode(&mut buf);
+        }
+
+        // element segments
+        (self.element_segments.len() as u32).encode(&mut buf);
+        for es in &self.element_segments {
+            es.ref_type.encode(&mut buf);
+            es.elem.encode(&mut buf);
+        }
+
+        // data segments
+        (self.data_segments.len() as u32).encode(&mut buf);
+        for ds in &self.data_segments {
+            (ds.data.len() as u32).encode(&mut buf);
+            buf.extend_from_slice(&ds.data);
+        }
+
+        // instances
+        self.instances.encode(&mut buf);
+
+        // func_addr_to_module
+        self.func_addr_to_module.encode(&mut buf);
+
+        // value stack
+        let (stack_data, stack_cursor) = self.stack.snapshot_data();
+        (stack_data.len() as u32).encode(&mut buf);
+        encode_bulk(stack_data, &mut buf);
+        stack_cursor.encode(&mut buf);
+
+        // call stack
+        self.call_stack.encode(&mut buf);
+
+        // fuel + pending_arity
+        self.fuel.encode(&mut buf);
+        self.pending_arity.encode(&mut buf);
+
+        buf
+    }
+
+    pub fn from_snapshot(bytes: &[u8]) -> Self {
+        let buf = &mut &bytes[..];
+
+        let magic: [u8; 4] = buf[..4].try_into().unwrap();
+        assert_eq!(&magic, SNAPSHOT_MAGIC, "invalid snapshot magic");
+        *buf = &buf[4..];
+        let version = u32::decode(buf);
+        assert_eq!(
+            version, SNAPSHOT_VERSION,
+            "unsupported snapshot version {version}"
+        );
+
+        // functions
+        let num_funcs = u32::decode(buf) as usize;
+        let mut functions = Vec::with_capacity(num_funcs);
+        let dummy_address_map = Rc::new(AddressMap::default());
+        let dummy_function = Function {
+            type_index: 0,
+            locals: vec![],
+            body: vec![],
+        };
+
+        for _ in 0..num_funcs {
+            let tag = u8::decode(buf);
+            assert_eq!(tag, 0, "cannot restore host functions from snapshot");
+            let function_type = FunctionType::decode(buf);
+            functions.push(FunctionInstance::Local {
+                function_type,
+                address_map: Rc::clone(&dummy_address_map),
+                code: dummy_function.clone(),
+            });
+        }
+
+        // tables
+        let num_tables = u32::decode(buf) as usize;
+        let mut tables = Vec::with_capacity(num_tables);
+        for _ in 0..num_tables {
+            let table_type = TableType::decode(buf);
+            let elem = Vec::decode(buf);
+            tables.push(TableInstance { table_type, elem });
+        }
+
+        // memories
+        let num_memories = u32::decode(buf) as usize;
+        let mut memories = Vec::with_capacity(num_memories);
+        for _ in 0..num_memories {
+            let memory_type = MemoryType::decode(buf);
+            let data_len = u64::decode(buf) as usize;
+            let data = buf[..data_len].to_vec();
+            *buf = &buf[data_len..];
+            memories.push(MemoryInstance { memory_type, data });
+        }
+
+        // globals
+        let num_globals = u32::decode(buf) as usize;
+        let mut globals = Vec::with_capacity(num_globals);
+        for _ in 0..num_globals {
+            let global_type = GlobalType::decode(buf);
+            let value = RawValue::decode(buf);
+            globals.push(GlobalInstance { global_type, value });
+        }
+
+        // tags
+        let num_tags = u32::decode(buf) as usize;
+        let mut tags = Vec::with_capacity(num_tags);
+        for _ in 0..num_tags {
+            let tag_type = FunctionType::decode(buf);
+            tags.push(TagInstance { tag_type });
+        }
+
+        // element segments
+        let num_elems = u32::decode(buf) as usize;
+        let mut element_segments = Vec::with_capacity(num_elems);
+        for _ in 0..num_elems {
+            let ref_type = RefType::decode(buf);
+            let elem = Vec::decode(buf);
+            element_segments.push(ElementInstance { ref_type, elem });
+        }
+
+        // data segments
+        let num_data = u32::decode(buf) as usize;
+        let mut data_segments = Vec::with_capacity(num_data);
+        for _ in 0..num_data {
+            let len = u32::decode(buf) as usize;
+            let data = buf[..len].to_vec();
+            *buf = &buf[len..];
+            data_segments.push(DataInstance { data });
+        }
+
+        // instances
+        let instances = Vec::decode(buf);
+
+        // func_addr_to_module
+        let func_addr_to_module = Vec::decode(buf);
+
+        // value stack
+        let _stack_capacity = u32::decode(buf) as usize;
+        let stack_data = decode_bulk(buf);
+        let stack_cursor = usize::decode(buf);
+        let stack = ValueStack::from_snapshot(stack_data, stack_cursor);
+
+        // call stack
+        let call_stack = Vec::decode(buf);
+
+        // fuel + pending_arity
+        let fuel = Option::decode(buf);
+        let pending_arity = Option::decode(buf);
+
+        Self {
+            functions,
+            tables,
+            memories,
+            globals,
+            tags,
+            element_segments,
+            data_segments,
+            instances,
+            func_addr_to_module,
+            stack,
+            call_stack,
+            fuel,
+            pending_arity,
+        }
+    }
 }

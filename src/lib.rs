@@ -8,6 +8,7 @@ pub mod ir;
 pub mod leb128;
 mod module;
 pub mod parser;
+pub mod snapshot;
 mod store;
 pub mod value_stack;
 
