@@ -1,3 +1,5 @@
+#![cfg(not(feature = "spec-tests"))]
+
 use gabagool::{Module, RawValue, Store};
 
 fn run_program(wasm_path: &str, func: &str, args: Vec<RawValue>) -> i32 {
