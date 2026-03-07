@@ -38,3 +38,7 @@ cargo r -- stair_climb.wasm stair_climb 20
 https://webassembly.github.io/spec/core/<br>
 https://github.com/bytecodealliance/wasmtime/issues/3017<br>
 https://github.com/bytecodealliance/wasmtime/issues/4002<br>
+
+https://www.infoq.com/podcasts/web-assembly-component-model/
+https://blog.sunfishcode.online/what-is-a-wasm-component/
+https://www.fermyon.com/blog/webassembly-component-model
