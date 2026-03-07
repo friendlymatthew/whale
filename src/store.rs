@@ -30,6 +30,11 @@ pub const MAX_CALL_DEPTH: usize = 1024;
 pub enum ExecutionState {
     Completed(Vec<RawValue>),
     FuelExhausted,
+    Suspended {
+        module_name: String,
+        func_name: String,
+        args: Vec<RawValue>,
+    },
 }
 
 impl ExecutionState {
@@ -37,6 +42,9 @@ impl ExecutionState {
         match self {
             Self::Completed(v) => Ok(v),
             Self::FuelExhausted => instantiation_err!("execution paused: fuel exhausted"),
+            Self::Suspended { func_name, .. } => {
+                instantiation_err!("execution suspended on host function: {}", func_name)
+            }
         }
     }
 }
@@ -114,6 +122,7 @@ macro_rules! mem_store_c {
 enum RunOutcome {
     Completed,
     FuelExhausted,
+    Suspended,
 }
 
 /// A handle to an instantiated WASM module in the store
@@ -168,6 +177,7 @@ pub struct Store {
     call_stack: Vec<CallFrame>,
     fuel: Option<u64>,
     pending_arity: Option<usize>,
+    pending_suspension: Option<(String, String, Vec<RawValue>)>,
 }
 
 impl Default for Store {
@@ -202,6 +212,7 @@ impl Store {
             call_stack: Vec::new(),
             fuel: None,
             pending_arity: None,
+            pending_suspension: None,
             instances: vec![],
             func_addr_to_module: vec![],
         }
@@ -703,7 +714,9 @@ impl Store {
                 .ok_or_else(|| {
                     Error::Instantiation(format!("start function index {} oob", start_idx))
                 })?;
-            self.push_function_call(func_addr)?;
+            if self.push_function_call(func_addr)? {
+                instantiation_err!("start function cannot be a host import");
+            }
             self.run()?;
         }
 
@@ -741,13 +754,41 @@ impl Store {
             .pending_arity
             .ok_or_else(|| Error::Instantiation("no pending execution to resume".into()))?;
 
+        self.finish_run(arity)
+    }
+
+    pub fn resume_with(&mut self, return_values: &[RawValue]) -> Result<ExecutionState> {
+        let arity = self
+            .pending_arity
+            .ok_or_else(|| Error::Instantiation("no pending execution to resume".into()))?;
+
+        for val in return_values {
+            self.stack.push(*val);
+        }
+
+        self.finish_run(arity)
+    }
+
+    fn finish_run(&mut self, num_results: usize) -> Result<ExecutionState> {
         match self.run() {
             Ok(RunOutcome::Completed) => {
-                let results = self.stack.pop_n(arity);
+                let results = self.stack.pop_n(num_results);
                 self.pending_arity = None;
                 Ok(ExecutionState::Completed(results.to_vec()))
             }
-            Ok(RunOutcome::FuelExhausted) => Ok(ExecutionState::FuelExhausted),
+            Ok(RunOutcome::FuelExhausted) => {
+                self.pending_arity = Some(num_results);
+                Ok(ExecutionState::FuelExhausted)
+            }
+            Ok(RunOutcome::Suspended) => {
+                self.pending_arity = Some(num_results);
+                let (module_name, func_name, args) = self.pending_suspension.take().unwrap();
+                Ok(ExecutionState::Suspended {
+                    module_name,
+                    func_name,
+                    args,
+                })
+            }
             Err(e) => {
                 self.stack.clear();
                 self.call_stack.clear();
@@ -772,10 +813,10 @@ impl Store {
             .ok_or_else(|| Error::Instantiation(format!("function addr {} oob", function_addr)))?;
 
         let (num_args, num_results) = match fi {
-            FunctionInstance::Local { function_type, .. } => {
+            FunctionInstance::Local { function_type, .. }
+            | FunctionInstance::Host { function_type, .. } => {
                 (function_type.0 .0.len(), function_type.1 .0.len())
             }
-            _ => todo!("how does host functions work?"),
         };
 
         ensure!(
@@ -784,32 +825,25 @@ impl Store {
         );
 
         self.stack.extend_from_slice(&args);
-        self.push_function_call(function_addr)?;
+        let suspended = self.push_function_call(function_addr)?;
 
-        match self.run() {
-            Ok(RunOutcome::Completed) => {
-                let results = self.stack.pop_n(num_results);
-                self.pending_arity = None;
-                Ok(ExecutionState::Completed(results.to_vec()))
-            }
-            Ok(RunOutcome::FuelExhausted) => {
-                self.pending_arity = Some(num_results);
-                Ok(ExecutionState::FuelExhausted)
-            }
-            Err(e) => {
-                self.stack.clear();
-                self.call_stack.clear();
-                self.pending_arity = None;
-                Err(e)
-            }
+        if suspended {
+            let (module_name, func_name, host_args) = self.pending_suspension.take().unwrap();
+            return Ok(ExecutionState::Suspended {
+                module_name,
+                func_name,
+                args: host_args,
+            });
         }
+
+        self.finish_run(num_results)
     }
 
     fn compiled_func_index(&self, func_addr: usize) -> Option<(u16, u32)> {
         self.func_addr_to_module.get(func_addr).copied().flatten()
     }
 
-    fn push_function_call(&mut self, func_addr: usize) -> Result<()> {
+    fn push_function_call(&mut self, func_addr: usize) -> Result<bool> {
         ensure!(
             self.call_stack.len() < MAX_CALL_DEPTH,
             Error::Trap(Trap::CallStackExhausted)
@@ -825,16 +859,21 @@ impl Store {
 
         let Some((module_idx, compiled_idx)) = self.compiled_func_index(func_addr) else {
             match &self.functions[func_addr] {
-                FunctionInstance::Host { code, .. } => {
+                FunctionInstance::Host {
+                    module_name,
+                    function_name,
+                    ..
+                } => {
                     ensure!(
                         self.stack.len() >= num_args,
                         Error::Instantiation("not enough args on stack".into())
                     );
-                    let args_start = self.stack.len() - num_args;
-                    self.stack.truncate(args_start);
-                    code();
-                    // this is probably not correct but spec tests are no ops
-                    return Ok(());
+
+                    let args = self.stack.pop_n(num_args).to_vec();
+                    self.pending_suspension =
+                        Some((module_name.clone(), function_name.clone(), args));
+
+                    return Ok(true);
                 }
                 _ => instantiation_err!("expected host function at addr {}", func_addr),
             }
@@ -864,7 +903,7 @@ impl Store {
             arity: num_results,
         });
 
-        Ok(())
+        Ok(false)
     }
 
     fn run(&mut self) -> Result<RunOutcome> {
@@ -963,7 +1002,9 @@ impl Store {
                 }
                 Op::Call { func_idx } => {
                     let func_addr = self.instances[mi].function_addrs[func_idx as usize];
-                    self.push_function_call(func_addr)?;
+                    if self.push_function_call(func_addr)? {
+                        return Ok(RunOutcome::Suspended);
+                    }
                 }
                 Op::CallIndirect {
                     type_idx,
@@ -1000,7 +1041,9 @@ impl Store {
                         Error::Trap(Trap::IndirectCallTypeMismatch)
                     );
 
-                    self.push_function_call(*func_addr)?;
+                    if self.push_function_call(*func_addr)? {
+                        return Ok(RunOutcome::Suspended);
+                    }
                 }
                 Op::ReturnCall { func_idx } => {
                     let func_addr = self.instances[mi].function_addrs[func_idx as usize];
@@ -1013,7 +1056,9 @@ impl Store {
                     self.stack.truncate(old_base + num_args);
                     self.call_stack.pop();
 
-                    self.push_function_call(func_addr)?;
+                    if self.push_function_call(func_addr)? {
+                        return Ok(RunOutcome::Suspended);
+                    }
                 }
                 Op::ReturnCallIndirect {
                     type_idx,
@@ -1057,7 +1102,9 @@ impl Store {
                     self.stack.copy_within(len - num_args..len, old_base);
                     self.stack.truncate(old_base + num_args);
                     self.call_stack.pop();
-                    self.push_function_call(func_addr)?;
+                    if self.push_function_call(func_addr)? {
+                        return Ok(RunOutcome::Suspended);
+                    }
                 }
                 Op::CallRef { .. } => {
                     let func_addr = match self.stack.pop().as_ref() {
@@ -1065,7 +1112,9 @@ impl Store {
                         Ref::FunctionAddr(f) => f,
                         _ => instantiation_err!("expected function or null ref"),
                     };
-                    self.push_function_call(func_addr)?;
+                    if self.push_function_call(func_addr)? {
+                        return Ok(RunOutcome::Suspended);
+                    }
                 }
                 Op::ReturnCallRef { .. } => {
                     let func_addr = match self.stack.pop().as_ref() {
@@ -1080,7 +1129,9 @@ impl Store {
                     self.stack.copy_within(len - num_args..len, old_base);
                     self.stack.truncate(old_base + num_args);
                     self.call_stack.pop();
-                    self.push_function_call(func_addr)?;
+                    if self.push_function_call(func_addr)? {
+                        return Ok(RunOutcome::Suspended);
+                    }
                 }
                 Op::I32Const { value } => self.stack.push(value),
                 Op::I64Const { value } => self.stack.push(value),
@@ -2228,8 +2279,15 @@ impl Store {
                     0u8.encode(&mut buf);
                     function_type.encode(&mut buf);
                 }
-                FunctionInstance::Host { .. } => {
-                    todo!("how do we wowrk around host functions?")
+                FunctionInstance::Host {
+                    function_type,
+                    module_name,
+                    function_name,
+                } => {
+                    1u8.encode(&mut buf);
+                    function_type.encode(&mut buf);
+                    module_name.encode(&mut buf);
+                    function_name.encode(&mut buf);
                 }
             }
         }
@@ -2322,13 +2380,27 @@ impl Store {
 
         for _ in 0..num_funcs {
             let tag = u8::decode(buf);
-            assert_eq!(tag, 0, "cannot restore host functions from snapshot");
-            let function_type = FunctionType::decode(buf);
-            functions.push(FunctionInstance::Local {
-                function_type,
-                address_map: Rc::clone(&dummy_address_map),
-                code: dummy_function.clone(),
-            });
+            match tag {
+                0 => {
+                    let function_type = FunctionType::decode(buf);
+                    functions.push(FunctionInstance::Local {
+                        function_type,
+                        address_map: Rc::clone(&dummy_address_map),
+                        code: dummy_function.clone(),
+                    });
+                }
+                1 => {
+                    let function_type = FunctionType::decode(buf);
+                    let module_name = String::decode(buf);
+                    let function_name = String::decode(buf);
+                    functions.push(FunctionInstance::Host {
+                        function_type,
+                        module_name,
+                        function_name,
+                    });
+                }
+                _ => panic!("invalid function instance tag: {tag}"),
+            }
         }
 
         // tables
@@ -2420,6 +2492,7 @@ impl Store {
             call_stack,
             fuel,
             pending_arity,
+            pending_suspension: None,
         }
     }
 }

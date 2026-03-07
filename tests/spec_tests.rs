@@ -88,7 +88,8 @@ fn setup_spectest_imports(store: &mut Store, module: &Module) -> Vec<ExternalVal
                 };
                 store.functions.push(FunctionInstance::Host {
                     function_type,
-                    code: Box::new(|| {}),
+                    module_name: import.module.clone(),
+                    function_name: import.name.clone(),
                 });
                 ExternalValue::Function { addr }
             }
@@ -100,6 +101,26 @@ fn setup_spectest_imports(store: &mut Store, module: &Module) -> Vec<ExternalVal
         .collect()
 }
 
+fn invoke_and_resume(
+    store: &mut Store,
+    instance: Instance,
+    name: &str,
+    args: &[RawValue],
+) -> Result<Vec<RawValue>, gabagool::Error> {
+    let mut state = store.invoke(instance, name, args.to_vec())?;
+    loop {
+        match state {
+            gabagool::ExecutionState::Completed(v) => return Ok(v),
+            gabagool::ExecutionState::Suspended { .. } => {
+                state = store.resume()?;
+            }
+            gabagool::ExecutionState::FuelExhausted => {
+                return Err(gabagool::Error::Instantiation("fuel exhausted".into()));
+            }
+        }
+    }
+}
+
 fn spec_step_assert_return(
     store: &mut Store,
     instance: Instance,
@@ -109,10 +130,8 @@ fn spec_step_assert_return(
     step: usize,
     failures: &mut Vec<String>,
 ) {
-    match store
-        .invoke(instance, name, args.to_vec())
-        .and_then(|s| s.into_completed())
-    {
+    let result = invoke_and_resume(store, instance, name, args);
+    match result {
         Ok(actual) => {
             if !values_match(expected, &actual) {
                 failures.push(format!(
@@ -138,10 +157,7 @@ fn spec_step_assert_trap(
     step: usize,
     failures: &mut Vec<String>,
 ) {
-    if let Ok(results) = store
-        .invoke(instance, name, args.to_vec())
-        .and_then(|s| s.into_completed())
-    {
+    if let Ok(results) = invoke_and_resume(store, instance, name, args) {
         failures.push(format!(
             "step {} assert_trap(\"{}\", {:?}): expected trap, got {:?}",
             step, name, args, results
@@ -150,7 +166,7 @@ fn spec_step_assert_trap(
 }
 
 fn spec_step_invoke(store: &mut Store, instance: Instance, name: &str, args: &[RawValue]) {
-    let _ = store.invoke(instance, name, args.to_vec());
+    let _ = invoke_and_resume(store, instance, name, args);
 }
 
 fn values_match(expected: &[ExpectedValue], actual: &[RawValue]) -> bool {
@@ -257,7 +273,8 @@ fn resolve_imports_with_registered(
                     };
                     store.functions.push(FunctionInstance::Host {
                         function_type,
-                        code: Box::new(|| {}),
+                        module_name: import.module.clone(),
+                        function_name: import.name.clone(),
                     });
                     ExternalValue::Function { addr }
                 }

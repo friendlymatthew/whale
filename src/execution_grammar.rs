@@ -1,4 +1,4 @@
-use std::fmt::{Debug, Formatter};
+use std::fmt::Debug;
 use std::rc::Rc;
 
 use crate::binary_grammar::{Function, FunctionType, GlobalType, MemoryType, RefType, TableType};
@@ -105,6 +105,7 @@ pub struct AddressMap {
     pub exports: Vec<ExportInstance>,
 }
 
+#[derive(Debug)]
 pub enum FunctionInstance {
     Local {
         function_type: FunctionType,
@@ -113,29 +114,9 @@ pub enum FunctionInstance {
     },
     Host {
         function_type: FunctionType,
-        code: Box<dyn Fn()>,
+        module_name: String,
+        function_name: String,
     },
-}
-
-impl Debug for FunctionInstance {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Local {
-                function_type,
-                address_map,
-                code,
-            } => f
-                .debug_struct("FunctionInstance Local")
-                .field("function_type: {}", function_type)
-                .field("address: {}", address_map)
-                .field("code: {}", code)
-                .finish(),
-            Self::Host { function_type, .. } => f
-                .debug_struct("FunctionInstance Host")
-                .field("function_type {}", function_type)
-                .finish(),
-        }
-    }
 }
 
 #[derive(Debug)]
