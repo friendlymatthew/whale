@@ -9,9 +9,10 @@ use crate::binary_grammar::{
     DataMode, DataSection, DataSegment, ElementMode, ElementSection, ElementSegment, Export,
     ExportDescription, ExportSection, FieldType, Function, FunctionSection, FunctionType, Global,
     GlobalSection, GlobalType, HeapType, ImportDeclaration, ImportDescription, ImportSection,
-    Instruction, Limit, Local, MemArg, MemorySection, MemoryType, Mutability, ParsedModule, RefType,
-    ResultType, Section, StorageType, StructType, SubType, TableDef, TableSection, TableType, Tag,
-    TagSection, TypeSection, ValueType, MAGIC_NUMBER, TERM_ELSE_BYTE, TERM_END_BYTE,
+    Instruction, Limit, Local, MemArg, MemorySection, MemoryType, Mutability, ParsedModule,
+    RefType, ResultType, Section, StorageType, StructType, SubType, TableDef, TableSection,
+    TableType, Tag, TagSection, TypeSection, ValueType, MAGIC_NUMBER, TERM_ELSE_BYTE,
+    TERM_END_BYTE,
 };
 use crate::leb128::{self, MAX_LEB128_LEN_32, MAX_LEB128_LEN_64};
 
@@ -69,15 +70,16 @@ impl<'a> Parser<'a> {
                 Section::DataCount(n) => data_count = Some(n),
                 Section::Tag(TagSection { mut tags }) => module.tags.append(&mut tags),
             }
-
         }
 
         if let Some(count) = data_count {
             ensure!(
                 count as usize == module.data_segments.len(),
-                Error::Parse(format!("Data count {} does not match number of data segments {}",
-                count,
-                module.data_segments.len()))
+                Error::Parse(format!(
+                    "Data count {} does not match number of data segments {}",
+                    count,
+                    module.data_segments.len()
+                ))
             );
         }
 
@@ -90,7 +92,10 @@ impl<'a> Parser<'a> {
             Error::Parse("Expected magic number in preamble.".into())
         );
 
-        ensure!(self.read_slice(4)? == [1, 0, 0, 0], Error::Parse("Expected version 1.".into()));
+        ensure!(
+            self.read_slice(4)? == [1, 0, 0, 0],
+            Error::Parse("Expected version 1.".into())
+        );
 
         Ok(1)
     }
@@ -437,7 +442,10 @@ impl<'a> Parser<'a> {
                     max: self.read_u64()?,
                 },
             )),
-            _ => parse_err!("Expected limit flag 0x00/0x01/0x04/0x05. Got: 0x{:02X}", flag),
+            _ => parse_err!(
+                "Expected limit flag 0x00/0x01/0x04/0x05. Got: 0x{:02X}",
+                flag
+            ),
         }
     }
 
@@ -1274,10 +1282,7 @@ impl<'a> Parser<'a> {
             );
             let table_type = self.parse_table_type()?;
             let init = self.parse_expression()?;
-            Ok(TableDef {
-                table_type,
-                init,
-            })
+            Ok(TableDef { table_type, init })
         } else {
             let table_type = self.parse_table_type()?;
             let ht = match table_type.element_reference_type {
@@ -1369,7 +1374,10 @@ impl<'a> Parser<'a> {
                 }
             }
             1 => {
-                ensure!(self.read_u8()? == 0x00, Error::Parse("Expected elemkind 0x00.".into()));
+                ensure!(
+                    self.read_u8()? == 0x00,
+                    Error::Parse("Expected elemkind 0x00.".into())
+                );
 
                 let expression = self
                     .parse_vec(Self::read_u32)?
@@ -1386,7 +1394,10 @@ impl<'a> Parser<'a> {
             2 => {
                 let table_index = self.read_u32()?;
                 let offset = self.parse_expression()?;
-                ensure!(self.read_u8()? == 0x00, Error::Parse("Expected elemkind 0x00.".into()));
+                ensure!(
+                    self.read_u8()? == 0x00,
+                    Error::Parse("Expected elemkind 0x00.".into())
+                );
 
                 let expression = self
                     .parse_vec(Self::read_u32)?
@@ -1404,7 +1415,10 @@ impl<'a> Parser<'a> {
                 }
             }
             3 => {
-                ensure!(self.read_u8()? == 0x00, Error::Parse("Expected elemkind 0x00.".into()));
+                ensure!(
+                    self.read_u8()? == 0x00,
+                    Error::Parse("Expected elemkind 0x00.".into())
+                );
 
                 let expression = self
                     .parse_vec(Self::read_u32)?

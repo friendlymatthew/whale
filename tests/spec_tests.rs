@@ -1,7 +1,7 @@
 use gabagool::{
-    parser::Parser, AddrType, CompositeType, ExportInstance, ExternalValue,
-    FunctionInstance, GlobalInstance, GlobalType, ImportDescription, Instance, Limit,
-    MemoryInstance, MemoryType, Module, RawValue, Ref, Store, ValueType,
+    parser::Parser, AddrType, CompositeType, ExportInstance, ExternalValue, FunctionInstance,
+    GlobalInstance, GlobalType, ImportDescription, Instance, Limit, MemoryInstance, MemoryType,
+    Module, RawValue, Ref, Store, ValueType,
 };
 
 #[derive(Debug)]
@@ -175,7 +175,9 @@ fn values_match(expected: &[ExpectedValue], actual: &[RawValue]) -> bool {
             ExpectedValue::F64(pat) => {
                 let a = act.as_f64();
                 match pat {
-                    NanPat::CanonicalNan => a.is_nan() && (a.to_bits() & 0x0007_FFFF_FFFF_FFFF == 0),
+                    NanPat::CanonicalNan => {
+                        a.is_nan() && (a.to_bits() & 0x0007_FFFF_FFFF_FFFF == 0)
+                    }
                     NanPat::ArithmeticNan => a.is_nan(),
                     NanPat::Value(e) => a.to_bits() == *e,
                 }

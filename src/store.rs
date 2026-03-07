@@ -147,7 +147,8 @@ pub struct InstantiatedModule {
 
 /// The runtime state for all instantiated WASM modules
 ///
-/// It also includes shared linear memories, tables, globals, and the execution stacks
+/// It also includes shared linear memories, tables, globals, and the execution
+/// stacks
 pub struct Store {
     // wasm address spaces indexed by module instances
     pub functions: Vec<FunctionInstance>,

@@ -5,7 +5,6 @@ use crate::{ensure, parse_err};
 pub const MAX_LEB128_LEN_32: usize = 5;
 pub const MAX_LEB128_LEN_64: usize = 10;
 
-
 /// Returns the encoded size of an unsigned leb128-encoded integer.
 #[inline]
 fn size_u32(x: u32) -> usize {
@@ -61,14 +60,19 @@ pub fn read_u32(buf: &[u8]) -> Result<(u32, usize)> {
         s += 7
     }
 
-    parse_err!("The number being decoded exceeds the maximum length of a leb128-encoded 32-bit integer.")
+    parse_err!(
+        "The number being decoded exceeds the maximum length of a leb128-encoded 32-bit integer."
+    )
 }
 
 #[inline]
 pub fn write_i32(buf: &mut [u8], mut x: i32) -> Result<usize> {
     let mut i = 0;
     loop {
-        ensure!(i < buf.len() && i < MAX_LEB128_LEN_32, Error::Parse("buffer too small for signed LEB128 i32".into()));
+        ensure!(
+            i < buf.len() && i < MAX_LEB128_LEN_32,
+            Error::Parse("buffer too small for signed LEB128 i32".into())
+        );
         let mut byte = (x & 0x7F) as u8;
         x >>= 7;
         let done = (x == 0 && byte & 0x40 == 0) || (x == -1 && byte & 0x40 != 0);
@@ -133,7 +137,9 @@ pub fn read_u64(buf: &[u8]) -> Result<(u64, usize)> {
         s += 7
     }
 
-    parse_err!("The number being decoded exceeds the maximum length of a leb128-encoded 64-bit integer.")
+    parse_err!(
+        "The number being decoded exceeds the maximum length of a leb128-encoded 64-bit integer."
+    )
 }
 
 #[inline]
@@ -199,7 +205,22 @@ mod tests {
 
     #[test]
     fn signed_leb128_roundtrip() -> Result<()> {
-        for x in [i32::MIN, i32::MIN + 1, -1, 0, 1, 2, 10, 63, 64, 127, 128, 255, 256, i32::MAX] {
+        for x in [
+            i32::MIN,
+            i32::MIN + 1,
+            -1,
+            0,
+            1,
+            2,
+            10,
+            63,
+            64,
+            127,
+            128,
+            255,
+            256,
+            i32::MAX,
+        ] {
             test_i32_roundtrip(x)?;
         }
         Ok(())

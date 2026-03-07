@@ -2,7 +2,8 @@
 
 // #[test]
 // fn pause_resume_snapshot() {
-//     let wasm_bytes = std::fs::read("stair_climb.wasm").expect("stair_climb.wasm not found");
+//     let wasm_bytes =
+// std::fs::read("stair_climb.wasm").expect("stair_climb.wasm not found");
 
 //     let mut reference = Interpreter::new(&wasm_bytes).unwrap();
 //     let full_result = reference
@@ -26,7 +27,8 @@
 //     let mut restored = Interpreter::from_snapshot(&snapshot).unwrap();
 //     restored.set_fuel(10000);
 
-//     let resumed_result = restored.resume().unwrap().into_completed().unwrap();
+//     let resumed_result =
+// restored.resume().unwrap().into_completed().unwrap();
 
 //     assert_eq!(full_result, resumed_result);
 // }
