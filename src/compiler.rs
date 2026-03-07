@@ -630,7 +630,7 @@ impl<'a> Compiler<'a> {
                 self.emit(Op::TableSet { table_idx: *idx });
                 self.stack_height -= 2;
             }
-            Instruction::TableInit(elem_idx, table_idx) => {
+            Instruction::TableInit(table_idx, elem_idx) => {
                 self.emit(Op::TableInit {
                     elem_idx: *elem_idx,
                     table_idx: *table_idx,
