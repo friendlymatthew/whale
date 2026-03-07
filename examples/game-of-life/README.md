@@ -1,6 +1,6 @@
 # Game of life
 
-<img src="demo.gif" width="100%" alt="Game of Life demo">
+<img src="../../demo.gif" width="80%" alt="Game of Life demo">
 
 This demo runs Conway's game of life inside `gabagool`. The game logic is a small C program compiled to wasm. The host loads the wasm, calls `tick` and `render` each frame, and reads the framebuffer directly out of linear memory to draw to a window.
 

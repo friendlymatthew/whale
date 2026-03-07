@@ -3,26 +3,16 @@
 A WebAssembly interpreter written from scratch.
 
 This project aims to build a fully spec-compliant, performant interpreter whose entire execution state can be serialized, suspended, and restored.
+<br>
 
-```rs
-use gabagool::{Module, Store, RawValue};
+<details open>
+<summary>See demo</summary>
+<br>
+<img src="demo.gif" width="80%" alt="Game of Life demo"><br>
+<em>Each fork snapshots the entire WebAssembly execution state, spawns a brand new process, and resumes exactly where it left off.</em>
 
-fn main() -> gabagool::Result<()> {
-    let wasm_bytes = std::fs::read("stair_climb.wasm").unwrap();
-
-    let module = Module::new(&wasm_bytes)?;
-    let mut store = Store::new();
-    let instance = store.instantiate(&module, vec![])?;
-
-    let results = store
-        .invoke(instance, "stair_climb", vec![RawValue::from(4i32)])?
-        .into_completed()?;
-
-    println!("{:?}", results);
-
-    Ok(())
-}
-```
+<br>
+</details>
 
 # Status
 

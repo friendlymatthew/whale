@@ -12,7 +12,7 @@ use winit::window::Window;
 const CELL_PX: usize = 8;
 const SNAPSHOT_FILE: &str = "game-of-life.gabagool";
 
-const PALETTE_NAMES: &[&str] = &["amber", "green", "blue", "pink", "white"];
+// const PALETTE_NAMES: &[&str] = &["amber", "green", "blue", "pink", "white"];
 
 fn call_i32(store: &mut Store, instance: Instance, name: &str) -> gabagool::Result<i32> {
     let result = store.invoke(instance, name, vec![])?;
@@ -31,7 +31,7 @@ fn save_snapshot(store: &Store, path: &str) {
     if let Err(e) = std::fs::write(path, &bytes) {
         eprintln!("failed to write snapshot: {e}");
     } else {
-        println!("Snapshot saved to {path} ({} bytes)", bytes.len());
+        // println!("Snapshot saved to {path} ({} bytes)\n", bytes.len());
     }
 }
 
@@ -48,6 +48,8 @@ fn fork_snapshot(store: &Store, parent_x: i32, parent_y: i32) {
         eprintln!("fork snapshot error: {e}");
         return;
     }
+
+    // println!("Forked from snapshot: {path}]\n");
 
     let exe = std::env::current_exe().expect("failed to get current exe");
     if let Err(e) = Command::new(exe)
@@ -156,13 +158,12 @@ impl ApplicationHandler for App {
                 KeyCode::Escape => event_loop.exit(),
                 KeyCode::Space => {
                     self.paused = !self.paused;
-                    println!("{}", if self.paused { "Paused" } else { "Resumed" });
+                    // println!("{}", if self.paused { "Paused" } else { "Resumed" });
                 }
                 KeyCode::KeyS => {
                     save_snapshot(&self.store, SNAPSHOT_FILE);
                     if let Ok(idx) = call_i32(&mut self.store, self.instance, "cycle_palette") {
                         self.palette = idx as usize;
-                        println!("Palette: {}", PALETTE_NAMES[self.palette]);
                     }
                     self.blit();
                 }
@@ -216,20 +217,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .iter()
         .position(|a| a == "--restore")
         .and_then(|i| args.get(i + 1).map(|s| s.as_str()));
-    let win_pos: Option<(i32, i32)> = args
-        .iter()
-        .position(|a| a == "--pos")
-        .and_then(|i| {
-            let s = args.get(i + 1)?;
-            let (x, y) = s.split_once(',')?;
-            Some((x.parse().ok()?, y.parse().ok()?))
-        });
+    let win_pos: Option<(i32, i32)> = args.iter().position(|a| a == "--pos").and_then(|i| {
+        let s = args.get(i + 1)?;
+        let (x, y) = s.split_once(',')?;
+        Some((x.parse().ok()?, y.parse().ok()?))
+    });
 
     let (mut store, instance) = if let Some(path) = restore_path {
         let bytes = std::fs::read(path)?;
         let store = Store::from_snapshot(&bytes);
         let instance = store.instance(0);
-        println!("Restored from {path}");
         (store, instance)
     } else {
         let wasm_bytes = include_bytes!("../wasm/game.wasm");
