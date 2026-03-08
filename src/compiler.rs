@@ -5,6 +5,15 @@ use crate::ir::{CompiledFunction, JumpTableEntry, Op};
 
 const UNREACHABLE_DEPTH: i32 = i32::MIN;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct LabelId(u32);
+
+#[derive(Debug, Clone, Copy)]
+enum CompilerOp {
+    Op(Op),
+    Label(LabelId),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum BlockKind {
     Function,
@@ -18,8 +27,8 @@ struct BlockContext {
     kind: BlockKind,
     entry_stack_height: i32,
     branch_arity: usize,
-    start_pc: usize,
-    pending_patches: Vec<usize>,
+    start_label: LabelId,
+    end_label: LabelId,
 }
 
 /// Compiled IR and constant tables for a parsed Wasm module
@@ -35,10 +44,11 @@ pub struct ModuleCode {
 struct Compiler<'a> {
     types: &'a [SubType],
     func_signatures: Vec<(usize, usize)>,
-    ops: Vec<Op>,
+    ops: Vec<CompilerOp>,
     block_stack: Vec<BlockContext>,
     stack_height: i32,
     max_stack_height: i32,
+    next_label: u32,
     v128_constants: Vec<i128>,
     jump_tables: Vec<Vec<JumpTableEntry>>,
     shuffle_masks: Vec<[u8; 16]>,
@@ -79,10 +89,11 @@ pub fn compile(module: &ParsedModule) -> ModuleCode {
                 ops: Vec::new(),
                 block_stack: Vec::new(),
                 stack_height: 0,
+                max_stack_height: 0,
+                next_label: 0,
                 v128_constants: std::mem::take(&mut v128_constants),
                 jump_tables: std::mem::take(&mut jump_tables),
                 shuffle_masks: std::mem::take(&mut shuffle_masks),
-                max_stack_height: 0,
             };
             let cf = compiler.compile_function(f);
 
@@ -113,10 +124,11 @@ pub fn compile_function_into_code(
         ops: Vec::new(),
         block_stack: Vec::new(),
         stack_height: 0,
+        max_stack_height: 0,
+        next_label: 0,
         v128_constants: std::mem::take(&mut code.v128_constants),
         jump_tables: std::mem::take(&mut code.jump_tables),
         shuffle_masks: std::mem::take(&mut code.shuffle_masks),
-        max_stack_height: 0,
     };
     let cf = compiler.compile_function(func);
     code.v128_constants = compiler.v128_constants;
@@ -156,24 +168,28 @@ impl<'a> Compiler<'a> {
             (0, 0)
         };
 
+        let start_label = self.next_label();
+        let end_label = self.next_label();
+
         self.stack_height = num_args as i32;
+        self.emit_label(start_label);
         self.block_stack.push(BlockContext {
             kind: BlockKind::Function,
             entry_stack_height: num_args as i32,
             branch_arity: num_results,
-            start_pc: 0,
-            pending_patches: Vec::new(),
+            start_label,
+            end_label,
         });
 
         for instr in &func.body {
             self.compile_instruction(instr);
         }
 
-        let ctx = self.block_stack.pop().unwrap();
-        let return_pc = self.ops.len() as u32;
-        self.patch_pending(&ctx.pending_patches, return_pc);
-
+        self.block_stack.pop().unwrap();
+        self.emit_label(end_label);
         self.emit(Op::Return);
+
+        let assembled = self.assemble();
 
         let extra_locals: usize = func.locals.iter().map(|l| l.count as usize).sum();
         let mut local_types: Vec<ValueType> = match &st.composite_type {
@@ -184,6 +200,7 @@ impl<'a> Compiler<'a> {
             }
             _ => Vec::with_capacity(extra_locals),
         };
+
         for local in &func.locals {
             for _ in 0..local.count {
                 local_types.push(local.value_type.clone());
@@ -191,7 +208,7 @@ impl<'a> Compiler<'a> {
         }
 
         CompiledFunction {
-            ops: std::mem::take(&mut self.ops),
+            ops: assembled,
             type_index: func.type_index,
             num_args: num_args as u32,
             local_types,
@@ -199,60 +216,18 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    fn patch(&mut self, idx: usize, target: u32) {
-        match &mut self.ops[idx] {
-            Op::Jump {
-                target: t,
-                keep: _,
-                drop: _,
-            } => *t = target,
-            Op::JumpIf {
-                target: t,
-                keep: _,
-                drop: _,
-            } => *t = target,
-            Op::JumpIfNot {
-                target: t,
-                keep: _,
-                drop: _,
-            } => *t = target,
-            Op::BrOnNull {
-                target: t,
-                keep: _,
-                drop: _,
-            } => *t = target,
-            Op::BrOnNonNull {
-                target: t,
-                keep: _,
-                drop: _,
-            } => *t = target,
-            _ => panic!("cannot patch op at index {idx}"),
-        }
+    const fn next_label(&mut self) -> LabelId {
+        let id = LabelId(self.next_label);
+        self.next_label += 1;
+        id
     }
 
-    /*
-    the high bit is a tag to distinguish 2 types of pending patches
-
-        if high bit = 0: index into self.ops
-        if high bit = 1: the value encodes a jump table entry
-            the remaining bits are split (table_idx, entry_idx)
-    */
-    fn patch_pending(&mut self, pending_patches: &[usize], end_pc: u32) {
-        for &patch in pending_patches {
-            if patch & (1usize << 63) != 0 {
-                let table_idx = (patch >> 32) & 0x7FFF_FFFF;
-                let entry_idx = patch & 0xFFFF_FFFF;
-                self.jump_tables[table_idx][entry_idx].target = end_pc;
-            } else {
-                self.patch(patch, end_pc);
-            }
-        }
+    fn emit_label(&mut self, label: LabelId) {
+        self.ops.push(CompilerOp::Label(label));
     }
 
-    fn emit(&mut self, op: Op) -> usize {
-        let idx = self.ops.len();
-        self.ops.push(op);
-        idx
+    fn emit(&mut self, op: Op) {
+        self.ops.push(CompilerOp::Op(op));
     }
 
     fn emit_branch(&mut self, depth: u32, conditional: bool, negate: bool) {
@@ -262,21 +237,73 @@ impl<'a> Compiler<'a> {
         let keep = ctx.branch_arity as u16;
         let drop = (self.stack_height - ctx.entry_stack_height - keep as i32) as u16;
 
-        let is_loop = ctx.kind == BlockKind::Loop;
-        let target = if is_loop {
-            ctx.start_pc as u32
+        let target = if ctx.kind == BlockKind::Loop {
+            ctx.start_label
         } else {
-            u32::MAX
+            ctx.end_label
         };
 
-        let op_idx = match (conditional, negate) {
-            (true, true) => self.emit(Op::JumpIfNot { target, keep, drop }),
-            (true, false) => self.emit(Op::JumpIf { target, keep, drop }),
-            (false, _) => self.emit(Op::Jump { target, keep, drop }),
+        match (conditional, negate) {
+            (true, true) => self.emit(Op::JumpIfNot {
+                target: target.0,
+                keep,
+                drop,
+            }),
+            (true, false) => self.emit(Op::JumpIf {
+                target: target.0,
+                keep,
+                drop,
+            }),
+            (false, _) => self.emit(Op::Jump {
+                target: target.0,
+                keep,
+                drop,
+            }),
         };
+    }
 
-        if !is_loop {
-            self.block_stack[idx].pending_patches.push(op_idx);
+    fn assemble(&mut self) -> Vec<Op> {
+        // build map from label id -> output position
+        let mut label_positions = vec![0u32; self.next_label as usize];
+        let mut pos: u32 = 0;
+        for cop in &self.ops {
+            match cop {
+                CompilerOp::Label(id) => label_positions[id.0 as usize] = pos,
+                CompilerOp::Op(_) => pos += 1,
+            }
+        }
+
+        // resolve targets
+        let mut out = Vec::with_capacity(pos as usize);
+        for cop in &self.ops {
+            if let CompilerOp::Op(mut op) = *cop {
+                Self::resolve_targets(&mut op, &label_positions);
+                out.push(op);
+            }
+        }
+
+        // resolve jump table entries
+        for table in &mut self.jump_tables {
+            for entry in table.iter_mut() {
+                entry.target = label_positions[entry.target as usize];
+            }
+        }
+
+        self.ops.clear();
+
+        out
+    }
+
+    fn resolve_targets(op: &mut Op, labels: &[u32]) {
+        match op {
+            Op::Jump { target, .. }
+            | Op::JumpIf { target, .. }
+            | Op::JumpIfNot { target, .. }
+            | Op::BrOnNull { target, .. }
+            | Op::BrOnNonNull { target, .. } => {
+                *target = labels[*target as usize];
+            }
+            _ => {}
         }
     }
 
@@ -297,23 +324,26 @@ impl<'a> Compiler<'a> {
                 let entry = ((self.stack_height != UNREACHABLE_DEPTH) as i32)
                     .wrapping_mul(self.stack_height.wrapping_sub(m as i32));
 
+                let start_label = self.next_label();
+                let end_label = self.next_label();
+
+                self.emit_label(start_label);
+
                 self.block_stack.push(BlockContext {
                     kind: BlockKind::Block,
                     entry_stack_height: entry,
                     branch_arity: n,
-                    start_pc: self.ops.len(),
-                    pending_patches: Vec::new(),
+                    start_label,
+                    end_label,
                 });
 
                 for i in body {
                     self.compile_instruction(i);
                 }
 
-                let ctx = self.block_stack.pop().expect("we push right before");
-                let end_pc = self.ops.len() as u32;
-
-                self.patch_pending(&ctx.pending_patches, end_pc);
-                self.stack_height = ctx.entry_stack_height + n as i32;
+                self.block_stack.pop().expect("we push right before");
+                self.emit_label(end_label);
+                self.stack_height = entry + n as i32;
             }
             Instruction::Loop(bt, body) => {
                 let (m, n) = self.resolve_block_type(bt);
@@ -321,25 +351,26 @@ impl<'a> Compiler<'a> {
                 let entry = ((self.stack_height != UNREACHABLE_DEPTH) as i32)
                     .wrapping_mul(self.stack_height.wrapping_sub(m as i32));
 
-                let loop_start = self.ops.len();
+                let start_label = self.next_label();
+                let end_label = self.next_label();
+
+                self.emit_label(start_label);
 
                 self.block_stack.push(BlockContext {
                     kind: BlockKind::Loop,
                     entry_stack_height: entry,
                     branch_arity: m,
-                    start_pc: loop_start,
-                    pending_patches: Vec::new(),
+                    start_label,
+                    end_label,
                 });
 
                 for i in body {
                     self.compile_instruction(i);
                 }
 
-                let ctx = self.block_stack.pop().unwrap();
-                let end_pc = self.ops.len() as u32;
-
-                self.patch_pending(&ctx.pending_patches, end_pc);
-                self.stack_height = ctx.entry_stack_height + n as i32;
+                self.block_stack.pop().unwrap();
+                self.emit_label(end_label);
+                self.stack_height = entry + n as i32;
             }
             Instruction::IfElse(bt, then_body, else_body) => {
                 if self.stack_height != UNREACHABLE_DEPTH {
@@ -350,18 +381,24 @@ impl<'a> Compiler<'a> {
                 let entry = ((self.stack_height != UNREACHABLE_DEPTH) as i32)
                     .wrapping_mul(self.stack_height.wrapping_sub(m as i32));
 
-                let jump_to_else = self.emit(Op::JumpIfNot {
-                    target: u32::MAX,
+                let else_label = self.next_label();
+                let end_label = self.next_label();
+
+                self.emit(Op::JumpIfNot {
+                    target: else_label.0,
                     keep: 0,
                     drop: 0,
                 });
+
+                let start_label = self.next_label();
+                self.emit_label(start_label);
 
                 self.block_stack.push(BlockContext {
                     kind: BlockKind::IfElse,
                     entry_stack_height: entry,
                     branch_arity: n,
-                    start_pc: self.ops.len(),
-                    pending_patches: Vec::new(),
+                    start_label,
+                    end_label,
                 });
 
                 let saved_height = self.stack_height;
@@ -371,31 +408,25 @@ impl<'a> Compiler<'a> {
                 }
 
                 if else_body.is_empty() {
-                    let end_pc = self.ops.len() as u32;
-                    self.patch(jump_to_else, end_pc);
+                    self.emit_label(else_label);
                 } else {
-                    let jump_to_end = self.emit(Op::Jump {
-                        target: u32::MAX,
+                    self.emit(Op::Jump {
+                        target: end_label.0,
                         keep: 0,
                         drop: 0,
                     });
 
-                    let else_pc = self.ops.len() as u32;
-                    self.patch(jump_to_else, else_pc);
+                    self.emit_label(else_label);
 
                     self.stack_height = saved_height;
                     for i in else_body {
                         self.compile_instruction(i);
                     }
-
-                    let end_pc = self.ops.len() as u32;
-                    self.patch(jump_to_end, end_pc);
                 }
 
-                let ctx = self.block_stack.pop().unwrap();
-                let end_pc = self.ops.len() as u32;
-                self.patch_pending(&ctx.pending_patches, end_pc);
-                self.stack_height = ctx.entry_stack_height + n as i32;
+                self.block_stack.pop().unwrap();
+                self.emit_label(end_label);
+                self.stack_height = entry + n as i32;
             }
             Instruction::Br(depth) => {
                 self.emit_branch(*depth, false, false);
@@ -415,42 +446,21 @@ impl<'a> Compiler<'a> {
                     let idx = self.block_stack.len() - 1 - *label as usize;
                     let ctx = &self.block_stack[idx];
                     let drop = (self.stack_height - ctx.entry_stack_height - keep as i32) as u16;
-                    let is_loop = ctx.kind == BlockKind::Loop;
-                    let target = if is_loop {
-                        ctx.start_pc as u32
+
+                    let target = if ctx.kind == BlockKind::Loop {
+                        ctx.start_label
                     } else {
-                        u32::MAX
+                        ctx.end_label
                     };
-                    entries.push(JumpTableEntry { target, drop });
 
-                    if !is_loop {
-                        self.block_stack[idx].pending_patches.push(usize::MAX);
-                    }
-                }
-
-                for label in labels.iter().chain(std::iter::once(default)) {
-                    let idx = self.block_stack.len() - 1 - *label as usize;
-                    let ctx = &mut self.block_stack[idx];
-                    if ctx.kind != BlockKind::Loop {
-                        if let Some(&last) = ctx.pending_patches.last() {
-                            if last == usize::MAX {
-                                ctx.pending_patches.pop();
-                            }
-                        }
-                    }
+                    entries.push(JumpTableEntry {
+                        target: target.0,
+                        drop,
+                    });
                 }
 
                 let table_idx = self.jump_tables.len();
                 self.jump_tables.push(entries);
-
-                for (entry_i, label) in labels.iter().chain(std::iter::once(default)).enumerate() {
-                    let idx = self.block_stack.len() - 1 - *label as usize;
-                    let ctx = &self.block_stack[idx];
-                    if ctx.kind != BlockKind::Loop {
-                        let encoded = (1usize << 63) | (table_idx << 32) | entry_i;
-                        self.block_stack[idx].pending_patches.push(encoded);
-                    }
-                }
 
                 self.emit(Op::JumpTable {
                     index: table_idx as u32,
@@ -595,32 +605,35 @@ impl<'a> Compiler<'a> {
                 let ctx = &self.block_stack[idx];
                 let keep = ctx.branch_arity as u16;
                 let drop = (self.stack_height - ctx.entry_stack_height - keep as i32 - 1) as u16;
-                let is_loop = ctx.kind == BlockKind::Loop;
-                let target = if is_loop {
-                    ctx.start_pc as u32
+                let target = if ctx.kind == BlockKind::Loop {
+                    ctx.start_label
                 } else {
-                    u32::MAX
+                    ctx.end_label
                 };
-                let op_idx = self.emit(Op::BrOnNull { target, keep, drop });
-                if !is_loop {
-                    self.block_stack[idx].pending_patches.push(op_idx);
-                }
+                self.emit(Op::BrOnNull {
+                    target: target.0,
+                    keep,
+                    drop,
+                });
             }
             Instruction::BrOnNonNull(depth) => {
                 let idx = self.block_stack.len() - 1 - *depth as usize;
                 let ctx = &self.block_stack[idx];
                 let keep = ctx.branch_arity as u16;
                 let drop = (self.stack_height - ctx.entry_stack_height - keep as i32) as u16;
-                let is_loop = ctx.kind == BlockKind::Loop;
-                let target = if is_loop {
-                    ctx.start_pc as u32
+
+                let target = if ctx.kind == BlockKind::Loop {
+                    ctx.start_label
                 } else {
-                    u32::MAX
+                    ctx.end_label
                 };
-                let op_idx = self.emit(Op::BrOnNonNull { target, keep, drop });
-                if !is_loop {
-                    self.block_stack[idx].pending_patches.push(op_idx);
-                }
+
+                self.emit(Op::BrOnNonNull {
+                    target: target.0,
+                    keep,
+                    drop,
+                });
+
                 self.stack_height -= 1;
             }
             Instruction::TableGet(idx) => {
