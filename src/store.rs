@@ -972,16 +972,7 @@ impl Store {
             match op {
                 Op::Nop => {}
                 Op::Unreachable => trap!(Trap::Unreachable),
-                Op::Return => {
-                    let arity = self.call_stack[depth].arity;
-                    let base = self.call_stack[depth].stack_base;
-                    let len = self.stack.len();
-                    if arity > 0 {
-                        self.stack.copy_within(len - arity..len, base);
-                    }
-                    self.stack.truncate(base + arity);
-                    self.call_stack.pop();
-                }
+                Op::Return => self.do_return(depth),
                 Op::Jump { target, keep, drop } => {
                     self.stack.keep_top(keep as usize, drop as usize);
                     self.call_stack[depth].pc = target as usize;
@@ -1170,16 +1161,7 @@ impl Store {
                     let v = self.instances[mi].code.v128_constants[table_idx as usize];
                     self.stack.push_v128(v);
                 }
-                Op::LocalGet { local_idx } => {
-                    let locals = &self.call_stack[depth].locals;
-                    assert!(
-                        (local_idx as usize) < locals.len(),
-                        "compiler error: local index {local_idx} oob (func has {} locals)",
-                        locals.len()
-                    );
-                    let val = locals[local_idx as usize];
-                    self.stack.push(val);
-                }
+                Op::LocalGet { local_idx } => self.do_local_get(local_idx as usize, depth),
                 Op::LocalSet { local_idx } => {
                     let val = self.stack.pop();
                     let locals = &mut self.call_stack[depth].locals;
@@ -2210,9 +2192,35 @@ impl Store {
                         locals[local_idx_b as usize],
                     ]);
                 }
+                Op::LocalGetReturn { local_idx } => {
+                    self.do_local_get(local_idx as usize, depth);
+                    self.do_return(depth);
+                }
                 _ => todo!(),
             }
         }
+    }
+
+    fn do_local_get(&mut self, local_idx: usize, depth: usize) {
+        let locals = &self.call_stack[depth].locals;
+        assert!(
+            local_idx < locals.len(),
+            "compiler error: local index {local_idx} oob (func has {} locals)",
+            locals.len()
+        );
+
+        self.stack.push(locals[local_idx]);
+    }
+
+    fn do_return(&mut self, depth: usize) {
+        let arity = self.call_stack[depth].arity;
+        let base = self.call_stack[depth].stack_base;
+        let len = self.stack.len();
+        if arity > 0 {
+            self.stack.copy_within(len - arity..len, base);
+        }
+        self.stack.truncate(base + arity);
+        self.call_stack.pop();
     }
 
     fn func_num_params(&self, func_addr: usize) -> usize {

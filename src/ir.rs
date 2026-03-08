@@ -901,6 +901,9 @@ pub enum Op {
         local_idx_a: u32,
         local_idx_b: u32,
     },
+    LocalGetReturn {
+        local_idx: u32,
+    },
 }
 
 impl Op {

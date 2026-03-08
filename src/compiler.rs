@@ -205,6 +205,7 @@ impl<'a> Compiler<'a> {
         self.block_stack.pop().unwrap();
         self.emit_label(end_label);
         self.emit(Op::Return);
+        self.strip_dead_labels();
         self.fuse_ops();
 
         let assembled = self.assemble();
@@ -360,12 +361,43 @@ impl<'a> Compiler<'a> {
         }
     }
 
+    fn strip_dead_labels(&mut self) {
+        let mut live = vec![false; self.next_label as usize];
+
+        for cop in &self.ops {
+            if let CompilerOp::Op(op) = cop {
+                if let Some(target) = op.jump_target() {
+                    live[target as usize] = true;
+                }
+            }
+        }
+        for table in &self.jump_tables[self.jump_table_base..] {
+            for entry in table {
+                live[entry.target as usize] = true;
+            }
+        }
+        self.ops.retain(|cop| match cop {
+            CompilerOp::Label(id) => live[id.0 as usize],
+            _ => true,
+        });
+    }
+
     fn fuse_ops(&mut self) {
         let mut out = Vec::with_capacity(self.ops.len());
         let mut i = 0;
 
         while i < self.ops.len() {
             match &self.ops[i..] {
+                [CompilerOp::Op(Op::LocalGet { local_idx }), CompilerOp::Op(Op::Return), ..] => {
+                    out.push(
+                        Op::LocalGetReturn {
+                            local_idx: *local_idx,
+                        }
+                        .into(),
+                    );
+
+                    i += 2;
+                }
                 [CompilerOp::Op(Op::LocalGet {
                     local_idx: local_idx_a,
                 }), CompilerOp::Op(Op::LocalGet {
@@ -3052,6 +3084,18 @@ mod tests {
                 drop: 0,
             },
             Return,
+        ]
+        "#);
+    }
+
+    #[test]
+    fn fuse_local_get_return() {
+        let ops = compile_ops(vec![Instruction::LocalGet(0)]);
+        insta::assert_debug_snapshot!(&ops, @r#"
+        [
+            LocalGetReturn {
+                local_idx: 0,
+            },
         ]
         "#);
     }
