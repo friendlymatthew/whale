@@ -14,6 +14,18 @@ enum CompilerOp {
     Label(LabelId),
 }
 
+impl From<Op> for CompilerOp {
+    fn from(op: Op) -> Self {
+        Self::Op(op)
+    }
+}
+
+impl From<LabelId> for CompilerOp {
+    fn from(l: LabelId) -> Self {
+        Self::Label(l)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum BlockKind {
     Function,
@@ -188,6 +200,7 @@ impl<'a> Compiler<'a> {
         self.block_stack.pop().unwrap();
         self.emit_label(end_label);
         self.emit(Op::Return);
+        self.fuse_ops();
 
         let assembled = self.assemble();
 
@@ -300,11 +313,496 @@ impl<'a> Compiler<'a> {
             | Op::JumpIf { target, .. }
             | Op::JumpIfNot { target, .. }
             | Op::BrOnNull { target, .. }
-            | Op::BrOnNonNull { target, .. } => {
+            | Op::BrOnNonNull { target, .. }
+            | Op::I32EqZeroJumpIf { target, .. }
+            | Op::I32EqZeroJumpIfNot { target, .. }
+            | Op::I32EqJumpIf { target, .. }
+            | Op::I32NeJumpIf { target, .. }
+            | Op::I32LtSignedJumpIf { target, .. }
+            | Op::I32LtUnsignedJumpIf { target, .. }
+            | Op::I32GtSignedJumpIf { target, .. }
+            | Op::I32GtUnsignedJumpIf { target, .. }
+            | Op::I32LeSignedJumpIf { target, .. }
+            | Op::I32LeUnsignedJumpIf { target, .. }
+            | Op::I32GeSignedJumpIf { target, .. }
+            | Op::I32GeUnsignedJumpIf { target, .. }
+            | Op::I64EqZeroJumpIf { target, .. }
+            | Op::I64EqJumpIf { target, .. }
+            | Op::I64NeJumpIf { target, .. }
+            | Op::I64LtSignedJumpIf { target, .. }
+            | Op::I64LtUnsignedJumpIf { target, .. }
+            | Op::I64GtSignedJumpIf { target, .. }
+            | Op::I64GtUnsignedJumpIf { target, .. }
+            | Op::I64LeSignedJumpIf { target, .. }
+            | Op::I64LeUnsignedJumpIf { target, .. }
+            | Op::I64GeSignedJumpIf { target, .. }
+            | Op::I64GeUnsignedJumpIf { target, .. }
+            | Op::F32EqJumpIf { target, .. }
+            | Op::F32NeJumpIf { target, .. }
+            | Op::F32LtJumpIf { target, .. }
+            | Op::F32GtJumpIf { target, .. }
+            | Op::F32LeJumpIf { target, .. }
+            | Op::F32GeJumpIf { target, .. }
+            | Op::F64EqJumpIf { target, .. }
+            | Op::F64NeJumpIf { target, .. }
+            | Op::F64LtJumpIf { target, .. }
+            | Op::F64GtJumpIf { target, .. }
+            | Op::F64LeJumpIf { target, .. }
+            | Op::F64GeJumpIf { target, .. } => {
                 *target = labels[*target as usize];
             }
             _ => {}
         }
+    }
+
+    fn fuse_ops(&mut self) {
+        let mut out = Vec::with_capacity(self.ops.len());
+        let mut i = 0;
+
+        while i < self.ops.len() {
+            match &self.ops[i..] {
+                [CompilerOp::Op(Op::I32EqZero), CompilerOp::Op(Op::JumpIf { target, keep, drop }), ..] =>
+                {
+                    out.push(
+                        Op::I32EqZeroJumpIf {
+                            target: *target,
+                            keep: *keep,
+                            drop: *drop,
+                        }
+                        .into(),
+                    );
+                    i += 2;
+                }
+                [CompilerOp::Op(Op::I32EqZero), CompilerOp::Op(Op::JumpIfNot { target, keep, drop }), ..] =>
+                {
+                    out.push(
+                        Op::I32EqZeroJumpIfNot {
+                            target: *target,
+                            keep: *keep,
+                            drop: *drop,
+                        }
+                        .into(),
+                    );
+                    i += 2;
+                }
+                [CompilerOp::Op(Op::I32Eq), CompilerOp::Op(Op::JumpIf { target, keep, drop }), ..] =>
+                {
+                    out.push(
+                        Op::I32EqJumpIf {
+                            target: *target,
+                            keep: *keep,
+                            drop: *drop,
+                        }
+                        .into(),
+                    );
+                    i += 2;
+                }
+                [CompilerOp::Op(Op::I32Ne), CompilerOp::Op(Op::JumpIf { target, keep, drop }), ..] =>
+                {
+                    out.push(
+                        Op::I32NeJumpIf {
+                            target: *target,
+                            keep: *keep,
+                            drop: *drop,
+                        }
+                        .into(),
+                    );
+                    i += 2;
+                }
+                [CompilerOp::Op(Op::I32LtSigned), CompilerOp::Op(Op::JumpIf { target, keep, drop }), ..] =>
+                {
+                    out.push(
+                        Op::I32LtSignedJumpIf {
+                            target: *target,
+                            keep: *keep,
+                            drop: *drop,
+                        }
+                        .into(),
+                    );
+                    i += 2;
+                }
+                [CompilerOp::Op(Op::I32LtUnsigned), CompilerOp::Op(Op::JumpIf { target, keep, drop }), ..] =>
+                {
+                    out.push(
+                        Op::I32LtUnsignedJumpIf {
+                            target: *target,
+                            keep: *keep,
+                            drop: *drop,
+                        }
+                        .into(),
+                    );
+                    i += 2;
+                }
+                [CompilerOp::Op(Op::I32GtSigned), CompilerOp::Op(Op::JumpIf { target, keep, drop }), ..] =>
+                {
+                    out.push(
+                        Op::I32GtSignedJumpIf {
+                            target: *target,
+                            keep: *keep,
+                            drop: *drop,
+                        }
+                        .into(),
+                    );
+                    i += 2;
+                }
+                [CompilerOp::Op(Op::I32GtUnsigned), CompilerOp::Op(Op::JumpIf { target, keep, drop }), ..] =>
+                {
+                    out.push(
+                        Op::I32GtUnsignedJumpIf {
+                            target: *target,
+                            keep: *keep,
+                            drop: *drop,
+                        }
+                        .into(),
+                    );
+                    i += 2;
+                }
+                [CompilerOp::Op(Op::I32LeSigned), CompilerOp::Op(Op::JumpIf { target, keep, drop }), ..] =>
+                {
+                    out.push(
+                        Op::I32LeSignedJumpIf {
+                            target: *target,
+                            keep: *keep,
+                            drop: *drop,
+                        }
+                        .into(),
+                    );
+                    i += 2;
+                }
+                [CompilerOp::Op(Op::I32LeUnsigned), CompilerOp::Op(Op::JumpIf { target, keep, drop }), ..] =>
+                {
+                    out.push(
+                        Op::I32LeUnsignedJumpIf {
+                            target: *target,
+                            keep: *keep,
+                            drop: *drop,
+                        }
+                        .into(),
+                    );
+                    i += 2;
+                }
+                [CompilerOp::Op(Op::I32GeSigned), CompilerOp::Op(Op::JumpIf { target, keep, drop }), ..] =>
+                {
+                    out.push(
+                        Op::I32GeSignedJumpIf {
+                            target: *target,
+                            keep: *keep,
+                            drop: *drop,
+                        }
+                        .into(),
+                    );
+                    i += 2;
+                }
+                [CompilerOp::Op(Op::I32GeUnsigned), CompilerOp::Op(Op::JumpIf { target, keep, drop }), ..] =>
+                {
+                    out.push(
+                        Op::I32GeUnsignedJumpIf {
+                            target: *target,
+                            keep: *keep,
+                            drop: *drop,
+                        }
+                        .into(),
+                    );
+                    i += 2;
+                }
+                [CompilerOp::Op(Op::I64EqZero), CompilerOp::Op(Op::JumpIf { target, keep, drop }), ..] =>
+                {
+                    out.push(
+                        Op::I64EqZeroJumpIf {
+                            target: *target,
+                            keep: *keep,
+                            drop: *drop,
+                        }
+                        .into(),
+                    );
+                    i += 2;
+                }
+                [CompilerOp::Op(Op::I64Eq), CompilerOp::Op(Op::JumpIf { target, keep, drop }), ..] =>
+                {
+                    out.push(
+                        Op::I64EqJumpIf {
+                            target: *target,
+                            keep: *keep,
+                            drop: *drop,
+                        }
+                        .into(),
+                    );
+                    i += 2;
+                }
+                [CompilerOp::Op(Op::I64Ne), CompilerOp::Op(Op::JumpIf { target, keep, drop }), ..] =>
+                {
+                    out.push(
+                        Op::I64NeJumpIf {
+                            target: *target,
+                            keep: *keep,
+                            drop: *drop,
+                        }
+                        .into(),
+                    );
+                    i += 2;
+                }
+                [CompilerOp::Op(Op::I64LtSigned), CompilerOp::Op(Op::JumpIf { target, keep, drop }), ..] =>
+                {
+                    out.push(
+                        Op::I64LtSignedJumpIf {
+                            target: *target,
+                            keep: *keep,
+                            drop: *drop,
+                        }
+                        .into(),
+                    );
+                    i += 2;
+                }
+                [CompilerOp::Op(Op::I64LtUnsigned), CompilerOp::Op(Op::JumpIf { target, keep, drop }), ..] =>
+                {
+                    out.push(
+                        Op::I64LtUnsignedJumpIf {
+                            target: *target,
+                            keep: *keep,
+                            drop: *drop,
+                        }
+                        .into(),
+                    );
+                    i += 2;
+                }
+                [CompilerOp::Op(Op::I64GtSigned), CompilerOp::Op(Op::JumpIf { target, keep, drop }), ..] =>
+                {
+                    out.push(
+                        Op::I64GtSignedJumpIf {
+                            target: *target,
+                            keep: *keep,
+                            drop: *drop,
+                        }
+                        .into(),
+                    );
+                    i += 2;
+                }
+                [CompilerOp::Op(Op::I64GtUnsigned), CompilerOp::Op(Op::JumpIf { target, keep, drop }), ..] =>
+                {
+                    out.push(
+                        Op::I64GtUnsignedJumpIf {
+                            target: *target,
+                            keep: *keep,
+                            drop: *drop,
+                        }
+                        .into(),
+                    );
+                    i += 2;
+                }
+                [CompilerOp::Op(Op::I64LeSigned), CompilerOp::Op(Op::JumpIf { target, keep, drop }), ..] =>
+                {
+                    out.push(
+                        Op::I64LeSignedJumpIf {
+                            target: *target,
+                            keep: *keep,
+                            drop: *drop,
+                        }
+                        .into(),
+                    );
+                    i += 2;
+                }
+                [CompilerOp::Op(Op::I64LeUnsigned), CompilerOp::Op(Op::JumpIf { target, keep, drop }), ..] =>
+                {
+                    out.push(
+                        Op::I64LeUnsignedJumpIf {
+                            target: *target,
+                            keep: *keep,
+                            drop: *drop,
+                        }
+                        .into(),
+                    );
+                    i += 2;
+                }
+                [CompilerOp::Op(Op::I64GeSigned), CompilerOp::Op(Op::JumpIf { target, keep, drop }), ..] =>
+                {
+                    out.push(
+                        Op::I64GeSignedJumpIf {
+                            target: *target,
+                            keep: *keep,
+                            drop: *drop,
+                        }
+                        .into(),
+                    );
+                    i += 2;
+                }
+                [CompilerOp::Op(Op::I64GeUnsigned), CompilerOp::Op(Op::JumpIf { target, keep, drop }), ..] =>
+                {
+                    out.push(
+                        Op::I64GeUnsignedJumpIf {
+                            target: *target,
+                            keep: *keep,
+                            drop: *drop,
+                        }
+                        .into(),
+                    );
+                    i += 2;
+                }
+                [CompilerOp::Op(Op::F32Eq), CompilerOp::Op(Op::JumpIf { target, keep, drop }), ..] =>
+                {
+                    out.push(
+                        Op::F32EqJumpIf {
+                            target: *target,
+                            keep: *keep,
+                            drop: *drop,
+                        }
+                        .into(),
+                    );
+                    i += 2;
+                }
+                [CompilerOp::Op(Op::F32Ne), CompilerOp::Op(Op::JumpIf { target, keep, drop }), ..] =>
+                {
+                    out.push(
+                        Op::F32NeJumpIf {
+                            target: *target,
+                            keep: *keep,
+                            drop: *drop,
+                        }
+                        .into(),
+                    );
+                    i += 2;
+                }
+                [CompilerOp::Op(Op::F32Lt), CompilerOp::Op(Op::JumpIf { target, keep, drop }), ..] =>
+                {
+                    out.push(
+                        Op::F32LtJumpIf {
+                            target: *target,
+                            keep: *keep,
+                            drop: *drop,
+                        }
+                        .into(),
+                    );
+                    i += 2;
+                }
+                [CompilerOp::Op(Op::F32Gt), CompilerOp::Op(Op::JumpIf { target, keep, drop }), ..] =>
+                {
+                    out.push(
+                        Op::F32GtJumpIf {
+                            target: *target,
+                            keep: *keep,
+                            drop: *drop,
+                        }
+                        .into(),
+                    );
+                    i += 2;
+                }
+                [CompilerOp::Op(Op::F32Le), CompilerOp::Op(Op::JumpIf { target, keep, drop }), ..] =>
+                {
+                    out.push(
+                        Op::F32LeJumpIf {
+                            target: *target,
+                            keep: *keep,
+                            drop: *drop,
+                        }
+                        .into(),
+                    );
+                    i += 2;
+                }
+                [CompilerOp::Op(Op::F32Ge), CompilerOp::Op(Op::JumpIf { target, keep, drop }), ..] =>
+                {
+                    out.push(
+                        Op::F32GeJumpIf {
+                            target: *target,
+                            keep: *keep,
+                            drop: *drop,
+                        }
+                        .into(),
+                    );
+                    i += 2;
+                }
+                [CompilerOp::Op(Op::F64Eq), CompilerOp::Op(Op::JumpIf { target, keep, drop }), ..] =>
+                {
+                    out.push(
+                        Op::F64EqJumpIf {
+                            target: *target,
+                            keep: *keep,
+                            drop: *drop,
+                        }
+                        .into(),
+                    );
+                    i += 2;
+                }
+                [CompilerOp::Op(Op::F64Ne), CompilerOp::Op(Op::JumpIf { target, keep, drop }), ..] =>
+                {
+                    out.push(
+                        Op::F64NeJumpIf {
+                            target: *target,
+                            keep: *keep,
+                            drop: *drop,
+                        }
+                        .into(),
+                    );
+                    i += 2;
+                }
+                [CompilerOp::Op(Op::F64Lt), CompilerOp::Op(Op::JumpIf { target, keep, drop }), ..] =>
+                {
+                    out.push(
+                        Op::F64LtJumpIf {
+                            target: *target,
+                            keep: *keep,
+                            drop: *drop,
+                        }
+                        .into(),
+                    );
+                    i += 2;
+                }
+                [CompilerOp::Op(Op::F64Gt), CompilerOp::Op(Op::JumpIf { target, keep, drop }), ..] =>
+                {
+                    out.push(
+                        Op::F64GtJumpIf {
+                            target: *target,
+                            keep: *keep,
+                            drop: *drop,
+                        }
+                        .into(),
+                    );
+                    i += 2;
+                }
+                [CompilerOp::Op(Op::F64Le), CompilerOp::Op(Op::JumpIf { target, keep, drop }), ..] =>
+                {
+                    out.push(
+                        Op::F64LeJumpIf {
+                            target: *target,
+                            keep: *keep,
+                            drop: *drop,
+                        }
+                        .into(),
+                    );
+                    i += 2;
+                }
+                [CompilerOp::Op(Op::F64Ge), CompilerOp::Op(Op::JumpIf { target, keep, drop }), ..] =>
+                {
+                    out.push(
+                        Op::F64GeJumpIf {
+                            target: *target,
+                            keep: *keep,
+                            drop: *drop,
+                        }
+                        .into(),
+                    );
+                    i += 2;
+                }
+                [op, ..] => {
+                    out.push(*op);
+                    i += 1;
+                }
+                [] => break,
+            }
+        }
+
+        self.ops = out;
+    }
+
+    #[cfg(test)]
+    fn compile_and_get_ops(types: &[SubType], func: &Function) -> Vec<Op> {
+        let mut code = ModuleCode {
+            compiled_funcs: Vec::new(),
+            types: types.to_vec(),
+            v128_constants: Vec::new(),
+            jump_tables: Vec::new(),
+            shuffle_masks: Vec::new(),
+        };
+        let cf = compile_function_into_code(types, func, &mut code);
+        cf.ops
     }
 
     fn compile_instruction(&mut self, instr: &Instruction) {
@@ -2372,5 +2870,154 @@ impl<'a> Compiler<'a> {
         }
 
         self.max_stack_height = self.max_stack_height.max(self.stack_height);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::binary_grammar::{
+        BlockType, CompositeType, FunctionType, Instruction, ResultType, SubType, ValueType,
+    };
+
+    fn i32_func_type() -> SubType {
+        SubType {
+            is_final: true,
+            supertypes: vec![],
+            composite_type: CompositeType::Func(FunctionType(
+                ResultType(vec![ValueType::I32, ValueType::I32]),
+                ResultType(vec![ValueType::I32]),
+            )),
+        }
+    }
+
+    fn make_func(type_index: u32, body: Vec<Instruction>) -> Function {
+        Function {
+            type_index,
+            locals: vec![],
+            body,
+        }
+    }
+
+    fn compile_ops(body: Vec<Instruction>) -> Vec<Op> {
+        let types = vec![i32_func_type()];
+        Compiler::compile_and_get_ops(&types, &make_func(0, body))
+    }
+
+    #[test]
+    fn fuse_i32_eq_jump_if() {
+        let ops = compile_ops(vec![Instruction::Block(
+            BlockType::Empty,
+            vec![
+                Instruction::LocalGet(0),
+                Instruction::LocalGet(1),
+                Instruction::I32Eq,
+                Instruction::BrIf(0),
+            ],
+        )]);
+        insta::assert_debug_snapshot!(&ops, @r#"
+        [
+            LocalGet {
+                local_idx: 0,
+            },
+            LocalGet {
+                local_idx: 1,
+            },
+            I32EqJumpIf {
+                target: 3,
+                keep: 0,
+                drop: 0,
+            },
+            Return,
+        ]
+        "#);
+    }
+
+    #[test]
+    fn fuse_i32_lt_signed_jump_if() {
+        let ops = compile_ops(vec![Instruction::Block(
+            BlockType::Empty,
+            vec![
+                Instruction::LocalGet(0),
+                Instruction::LocalGet(1),
+                Instruction::I32LtSigned,
+                Instruction::BrIf(0),
+            ],
+        )]);
+        insta::assert_debug_snapshot!(&ops, @r#"
+        [
+            LocalGet {
+                local_idx: 0,
+            },
+            LocalGet {
+                local_idx: 1,
+            },
+            I32LtSignedJumpIf {
+                target: 3,
+                keep: 0,
+                drop: 0,
+            },
+            Return,
+        ]
+        "#);
+    }
+
+    #[test]
+    fn fuse_i32_eqz_jump_if() {
+        let ops = compile_ops(vec![Instruction::Block(
+            BlockType::Empty,
+            vec![
+                Instruction::LocalGet(0),
+                Instruction::I32EqZero,
+                Instruction::BrIf(0),
+            ],
+        )]);
+        insta::assert_debug_snapshot!(&ops, @r#"
+        [
+            LocalGet {
+                local_idx: 0,
+            },
+            I32EqZeroJumpIf {
+                target: 2,
+                keep: 0,
+                drop: 0,
+            },
+            Return,
+        ]
+        "#);
+    }
+
+    #[test]
+    fn no_fuse_when_jump_target_between() {
+        let ops = compile_ops(vec![Instruction::Block(
+            BlockType::Empty,
+            vec![
+                Instruction::Block(
+                    BlockType::SingleValue(ValueType::I32),
+                    vec![
+                        Instruction::Br(0),
+                        Instruction::LocalGet(0),
+                        Instruction::LocalGet(1),
+                        Instruction::I32Eq,
+                    ],
+                ),
+                Instruction::BrIf(0),
+            ],
+        )]);
+        insta::assert_debug_snapshot!(&ops, @r#"
+        [
+            Jump {
+                target: 1,
+                keep: 1,
+                drop: 65535,
+            },
+            JumpIf {
+                target: 2,
+                keep: 0,
+                drop: 0,
+            },
+            Return,
+        ]
+        "#);
     }
 }

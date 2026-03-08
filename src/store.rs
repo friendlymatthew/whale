@@ -67,6 +67,35 @@ macro_rules! pop_val {
     };
 }
 
+macro_rules! cmp_branch_zero {
+    ($self:expr, $depth:expr, $ty:ident, $target:expr, $keep:expr, $drop:expr, $op:tt) => {{
+        let a = pop_val!($self, $ty);
+        if a $op 0 {
+            $self.stack.keep_top($keep as usize, $drop as usize);
+            $self.call_stack[$depth].pc = $target as usize;
+        }
+    }};
+}
+
+macro_rules! cmp_branch {
+    ($self:expr, $depth:expr, $ty:ident, $target:expr, $keep:expr, $drop:expr, $op:tt) => {{
+        let a = pop_val!($self, $ty);
+        let b = pop_val!($self, $ty);
+        if b $op a {
+            $self.stack.keep_top($keep as usize, $drop as usize);
+            $self.call_stack[$depth].pc = $target as usize;
+        }
+    }};
+    ($self:expr, $depth:expr, $ty:ident, $target:expr, $keep:expr, $drop:expr, $cast:ty, $op:tt) => {{
+        let a = pop_val!($self, $ty);
+        let b = pop_val!($self, $ty);
+        if (b as $cast) $op (a as $cast) {
+            $self.stack.keep_top($keep as usize, $drop as usize);
+            $self.call_stack[$depth].pc = $target as usize;
+        }
+    }};
+}
+
 macro_rules! binop {
     ($self:expr, $variant:ident, |$b:ident, $a:ident| $expr:expr) => {{
         let $a = pop_val!($self, $variant);
@@ -2064,6 +2093,111 @@ impl Store {
                         a as u64
                     };
                     self.stack.push(r as i64);
+                }
+                Op::I32EqZeroJumpIf { target, keep, drop } => {
+                    cmp_branch_zero!(self, depth, I32, target, keep, drop, ==)
+                }
+                Op::I32EqZeroJumpIfNot { target, keep, drop } => {
+                    cmp_branch_zero!(self, depth, I32, target, keep, drop, !=)
+                }
+                Op::I32EqJumpIf { target, keep, drop } => {
+                    cmp_branch!(self, depth, I32, target, keep, drop, ==)
+                }
+                Op::I32NeJumpIf { target, keep, drop } => {
+                    cmp_branch!(self, depth, I32, target, keep, drop, !=)
+                }
+                Op::I32LtSignedJumpIf { target, keep, drop } => {
+                    cmp_branch!(self, depth, I32, target, keep, drop, <)
+                }
+                Op::I32LtUnsignedJumpIf { target, keep, drop } => {
+                    cmp_branch!(self, depth, I32, target, keep, drop, u32, <)
+                }
+                Op::I32GtSignedJumpIf { target, keep, drop } => {
+                    cmp_branch!(self, depth, I32, target, keep, drop, >)
+                }
+                Op::I32GtUnsignedJumpIf { target, keep, drop } => {
+                    cmp_branch!(self, depth, I32, target, keep, drop, u32, >)
+                }
+                Op::I32LeSignedJumpIf { target, keep, drop } => {
+                    cmp_branch!(self, depth, I32, target, keep, drop, <=)
+                }
+                Op::I32LeUnsignedJumpIf { target, keep, drop } => {
+                    cmp_branch!(self, depth, I32, target, keep, drop, u32, <=)
+                }
+                Op::I32GeSignedJumpIf { target, keep, drop } => {
+                    cmp_branch!(self, depth, I32, target, keep, drop, >=)
+                }
+                Op::I32GeUnsignedJumpIf { target, keep, drop } => {
+                    cmp_branch!(self, depth, I32, target, keep, drop, u32, >=)
+                }
+                Op::I64EqZeroJumpIf { target, keep, drop } => {
+                    cmp_branch_zero!(self, depth, I64, target, keep, drop, ==)
+                }
+                Op::I64EqJumpIf { target, keep, drop } => {
+                    cmp_branch!(self, depth, I64, target, keep, drop, ==)
+                }
+                Op::I64NeJumpIf { target, keep, drop } => {
+                    cmp_branch!(self, depth, I64, target, keep, drop, !=)
+                }
+                Op::I64LtSignedJumpIf { target, keep, drop } => {
+                    cmp_branch!(self, depth, I64, target, keep, drop, <)
+                }
+                Op::I64LtUnsignedJumpIf { target, keep, drop } => {
+                    cmp_branch!(self, depth, I64, target, keep, drop, u64, <)
+                }
+                Op::I64GtSignedJumpIf { target, keep, drop } => {
+                    cmp_branch!(self, depth, I64, target, keep, drop, >)
+                }
+                Op::I64GtUnsignedJumpIf { target, keep, drop } => {
+                    cmp_branch!(self, depth, I64, target, keep, drop, u64, >)
+                }
+                Op::I64LeSignedJumpIf { target, keep, drop } => {
+                    cmp_branch!(self, depth, I64, target, keep, drop, <=)
+                }
+                Op::I64LeUnsignedJumpIf { target, keep, drop } => {
+                    cmp_branch!(self, depth, I64, target, keep, drop, u64, <=)
+                }
+                Op::I64GeSignedJumpIf { target, keep, drop } => {
+                    cmp_branch!(self, depth, I64, target, keep, drop, >=)
+                }
+                Op::I64GeUnsignedJumpIf { target, keep, drop } => {
+                    cmp_branch!(self, depth, I64, target, keep, drop, u64, >=)
+                }
+                Op::F32EqJumpIf { target, keep, drop } => {
+                    cmp_branch!(self, depth, F32, target, keep, drop, ==)
+                }
+                Op::F32NeJumpIf { target, keep, drop } => {
+                    cmp_branch!(self, depth, F32, target, keep, drop, !=)
+                }
+                Op::F32LtJumpIf { target, keep, drop } => {
+                    cmp_branch!(self, depth, F32, target, keep, drop, <)
+                }
+                Op::F32GtJumpIf { target, keep, drop } => {
+                    cmp_branch!(self, depth, F32, target, keep, drop, >)
+                }
+                Op::F32LeJumpIf { target, keep, drop } => {
+                    cmp_branch!(self, depth, F32, target, keep, drop, <=)
+                }
+                Op::F32GeJumpIf { target, keep, drop } => {
+                    cmp_branch!(self, depth, F32, target, keep, drop, >=)
+                }
+                Op::F64EqJumpIf { target, keep, drop } => {
+                    cmp_branch!(self, depth, F64, target, keep, drop, ==)
+                }
+                Op::F64NeJumpIf { target, keep, drop } => {
+                    cmp_branch!(self, depth, F64, target, keep, drop, !=)
+                }
+                Op::F64LtJumpIf { target, keep, drop } => {
+                    cmp_branch!(self, depth, F64, target, keep, drop, <)
+                }
+                Op::F64GtJumpIf { target, keep, drop } => {
+                    cmp_branch!(self, depth, F64, target, keep, drop, >)
+                }
+                Op::F64LeJumpIf { target, keep, drop } => {
+                    cmp_branch!(self, depth, F64, target, keep, drop, <=)
+                }
+                Op::F64GeJumpIf { target, keep, drop } => {
+                    cmp_branch!(self, depth, F64, target, keep, drop, >=)
                 }
                 _ => todo!(),
             }

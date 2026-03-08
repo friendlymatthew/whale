@@ -722,4 +722,227 @@ pub enum Op {
     I16x8RelaxedQ15mulrSigned,
     I16x8RelaxedDotI8x16I7x16Signed,
     I32x4RelaxedDotI8x16I7x16AddSigned,
+    I32EqZeroJumpIf {
+        target: u32,
+        keep: u16,
+        drop: u16,
+    },
+    I32EqZeroJumpIfNot {
+        target: u32,
+        keep: u16,
+        drop: u16,
+    },
+    I32EqJumpIf {
+        target: u32,
+        keep: u16,
+        drop: u16,
+    },
+    I32NeJumpIf {
+        target: u32,
+        keep: u16,
+        drop: u16,
+    },
+    I32LtSignedJumpIf {
+        target: u32,
+        keep: u16,
+        drop: u16,
+    },
+    I32LtUnsignedJumpIf {
+        target: u32,
+        keep: u16,
+        drop: u16,
+    },
+    I32GtSignedJumpIf {
+        target: u32,
+        keep: u16,
+        drop: u16,
+    },
+    I32GtUnsignedJumpIf {
+        target: u32,
+        keep: u16,
+        drop: u16,
+    },
+    I32LeSignedJumpIf {
+        target: u32,
+        keep: u16,
+        drop: u16,
+    },
+    I32LeUnsignedJumpIf {
+        target: u32,
+        keep: u16,
+        drop: u16,
+    },
+    I32GeSignedJumpIf {
+        target: u32,
+        keep: u16,
+        drop: u16,
+    },
+    I32GeUnsignedJumpIf {
+        target: u32,
+        keep: u16,
+        drop: u16,
+    },
+    I64EqZeroJumpIf {
+        target: u32,
+        keep: u16,
+        drop: u16,
+    },
+    I64EqJumpIf {
+        target: u32,
+        keep: u16,
+        drop: u16,
+    },
+    I64NeJumpIf {
+        target: u32,
+        keep: u16,
+        drop: u16,
+    },
+    I64LtSignedJumpIf {
+        target: u32,
+        keep: u16,
+        drop: u16,
+    },
+    I64LtUnsignedJumpIf {
+        target: u32,
+        keep: u16,
+        drop: u16,
+    },
+    I64GtSignedJumpIf {
+        target: u32,
+        keep: u16,
+        drop: u16,
+    },
+    I64GtUnsignedJumpIf {
+        target: u32,
+        keep: u16,
+        drop: u16,
+    },
+    I64LeSignedJumpIf {
+        target: u32,
+        keep: u16,
+        drop: u16,
+    },
+    I64LeUnsignedJumpIf {
+        target: u32,
+        keep: u16,
+        drop: u16,
+    },
+    I64GeSignedJumpIf {
+        target: u32,
+        keep: u16,
+        drop: u16,
+    },
+    I64GeUnsignedJumpIf {
+        target: u32,
+        keep: u16,
+        drop: u16,
+    },
+    F32EqJumpIf {
+        target: u32,
+        keep: u16,
+        drop: u16,
+    },
+    F32NeJumpIf {
+        target: u32,
+        keep: u16,
+        drop: u16,
+    },
+    F32LtJumpIf {
+        target: u32,
+        keep: u16,
+        drop: u16,
+    },
+    F32GtJumpIf {
+        target: u32,
+        keep: u16,
+        drop: u16,
+    },
+    F32LeJumpIf {
+        target: u32,
+        keep: u16,
+        drop: u16,
+    },
+    F32GeJumpIf {
+        target: u32,
+        keep: u16,
+        drop: u16,
+    },
+    F64EqJumpIf {
+        target: u32,
+        keep: u16,
+        drop: u16,
+    },
+    F64NeJumpIf {
+        target: u32,
+        keep: u16,
+        drop: u16,
+    },
+    F64LtJumpIf {
+        target: u32,
+        keep: u16,
+        drop: u16,
+    },
+    F64GtJumpIf {
+        target: u32,
+        keep: u16,
+        drop: u16,
+    },
+    F64LeJumpIf {
+        target: u32,
+        keep: u16,
+        drop: u16,
+    },
+    F64GeJumpIf {
+        target: u32,
+        keep: u16,
+        drop: u16,
+    },
+}
+
+impl Op {
+    pub const fn jump_target(&self) -> Option<u32> {
+        match self {
+            Self::Jump { target, .. }
+            | Self::JumpIf { target, .. }
+            | Self::JumpIfNot { target, .. }
+            | Self::BrOnNull { target, .. }
+            | Self::BrOnNonNull { target, .. }
+            | Self::I32EqZeroJumpIf { target, .. }
+            | Self::I32EqZeroJumpIfNot { target, .. }
+            | Self::I32EqJumpIf { target, .. }
+            | Self::I32NeJumpIf { target, .. }
+            | Self::I32LtSignedJumpIf { target, .. }
+            | Self::I32LtUnsignedJumpIf { target, .. }
+            | Self::I32GtSignedJumpIf { target, .. }
+            | Self::I32GtUnsignedJumpIf { target, .. }
+            | Self::I32LeSignedJumpIf { target, .. }
+            | Self::I32LeUnsignedJumpIf { target, .. }
+            | Self::I32GeSignedJumpIf { target, .. }
+            | Self::I32GeUnsignedJumpIf { target, .. }
+            | Self::I64EqZeroJumpIf { target, .. }
+            | Self::I64EqJumpIf { target, .. }
+            | Self::I64NeJumpIf { target, .. }
+            | Self::I64LtSignedJumpIf { target, .. }
+            | Self::I64LtUnsignedJumpIf { target, .. }
+            | Self::I64GtSignedJumpIf { target, .. }
+            | Self::I64GtUnsignedJumpIf { target, .. }
+            | Self::I64LeSignedJumpIf { target, .. }
+            | Self::I64LeUnsignedJumpIf { target, .. }
+            | Self::I64GeSignedJumpIf { target, .. }
+            | Self::I64GeUnsignedJumpIf { target, .. }
+            | Self::F32EqJumpIf { target, .. }
+            | Self::F32NeJumpIf { target, .. }
+            | Self::F32LtJumpIf { target, .. }
+            | Self::F32GtJumpIf { target, .. }
+            | Self::F32LeJumpIf { target, .. }
+            | Self::F32GeJumpIf { target, .. }
+            | Self::F64EqJumpIf { target, .. }
+            | Self::F64NeJumpIf { target, .. }
+            | Self::F64LtJumpIf { target, .. }
+            | Self::F64GtJumpIf { target, .. }
+            | Self::F64LeJumpIf { target, .. }
+            | Self::F64GeJumpIf { target, .. } => Some(*target),
+            _ => None,
+        }
+    }
 }
