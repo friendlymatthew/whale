@@ -361,6 +361,21 @@ impl<'a> Compiler<'a> {
 
         while i < self.ops.len() {
             match &self.ops[i..] {
+                [CompilerOp::Op(Op::LocalGet {
+                    local_idx: local_idx_a,
+                }), CompilerOp::Op(Op::LocalGet {
+                    local_idx: local_idx_b,
+                }), ..] => {
+                    out.push(
+                        Op::LocalGet2 {
+                            local_idx_a: *local_idx_a,
+                            local_idx_b: *local_idx_b,
+                        }
+                        .into(),
+                    );
+
+                    i += 2;
+                }
                 [CompilerOp::Op(Op::I32EqZero), CompilerOp::Op(Op::JumpIf { target, keep, drop }), ..] =>
                 {
                     out.push(
@@ -2905,6 +2920,25 @@ mod tests {
     }
 
     #[test]
+    fn fuse_local_get2() {
+        let ops = compile_ops(vec![
+            Instruction::LocalGet(0),
+            Instruction::LocalGet(1),
+            Instruction::I32Add,
+        ]);
+        insta::assert_debug_snapshot!(&ops, @r#"
+        [
+            LocalGet2 {
+                local_idx_a: 0,
+                local_idx_b: 1,
+            },
+            I32Add,
+            Return,
+        ]
+        "#);
+    }
+
+    #[test]
     fn fuse_i32_eq_jump_if() {
         let ops = compile_ops(vec![Instruction::Block(
             BlockType::Empty,
@@ -2917,14 +2951,12 @@ mod tests {
         )]);
         insta::assert_debug_snapshot!(&ops, @r#"
         [
-            LocalGet {
-                local_idx: 0,
-            },
-            LocalGet {
-                local_idx: 1,
+            LocalGet2 {
+                local_idx_a: 0,
+                local_idx_b: 1,
             },
             I32EqJumpIf {
-                target: 3,
+                target: 2,
                 keep: 0,
                 drop: 0,
             },
@@ -2946,14 +2978,12 @@ mod tests {
         )]);
         insta::assert_debug_snapshot!(&ops, @r#"
         [
-            LocalGet {
-                local_idx: 0,
-            },
-            LocalGet {
-                local_idx: 1,
+            LocalGet2 {
+                local_idx_a: 0,
+                local_idx_b: 1,
             },
             I32LtSignedJumpIf {
-                target: 3,
+                target: 2,
                 keep: 0,
                 drop: 0,
             },

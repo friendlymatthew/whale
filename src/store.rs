@@ -2199,6 +2199,17 @@ impl Store {
                 Op::F64GeJumpIf { target, keep, drop } => {
                     cmp_branch!(self, depth, F64, target, keep, drop, >=)
                 }
+                Op::LocalGet2 {
+                    local_idx_a,
+                    local_idx_b,
+                } => {
+                    let locals = &self.call_stack[depth].locals;
+
+                    self.stack.extend_from_slice(&[
+                        locals[local_idx_a as usize],
+                        locals[local_idx_b as usize],
+                    ]);
+                }
                 _ => todo!(),
             }
         }

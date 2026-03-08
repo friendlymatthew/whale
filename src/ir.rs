@@ -897,6 +897,10 @@ pub enum Op {
         keep: u16,
         drop: u16,
     },
+    LocalGet2 {
+        local_idx_a: u32,
+        local_idx_b: u32,
+    },
 }
 
 impl Op {
