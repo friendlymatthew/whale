@@ -61,6 +61,7 @@ struct Compiler<'a> {
     stack_height: i32,
     max_stack_height: i32,
     next_label: u32,
+    jump_table_base: usize,
     v128_constants: Vec<i128>,
     jump_tables: Vec<Vec<JumpTableEntry>>,
     shuffle_masks: Vec<[u8; 16]>,
@@ -103,6 +104,7 @@ pub fn compile(module: &ParsedModule) -> ModuleCode {
                 stack_height: 0,
                 max_stack_height: 0,
                 next_label: 0,
+                jump_table_base: 0,
                 v128_constants: std::mem::take(&mut v128_constants),
                 jump_tables: std::mem::take(&mut jump_tables),
                 shuffle_masks: std::mem::take(&mut shuffle_masks),
@@ -138,6 +140,7 @@ pub fn compile_function_into_code(
         stack_height: 0,
         max_stack_height: 0,
         next_label: 0,
+        jump_table_base: 0,
         v128_constants: std::mem::take(&mut code.v128_constants),
         jump_tables: std::mem::take(&mut code.jump_tables),
         shuffle_masks: std::mem::take(&mut code.shuffle_masks),
@@ -179,6 +182,8 @@ impl<'a> Compiler<'a> {
         } else {
             (0, 0)
         };
+
+        self.jump_table_base = self.jump_tables.len();
 
         let start_label = self.next_label();
         let end_label = self.next_label();
@@ -295,8 +300,8 @@ impl<'a> Compiler<'a> {
             }
         }
 
-        // resolve jump table entries
-        for table in &mut self.jump_tables {
+        // resolve jump table entries (only tables from the current function)
+        for table in &mut self.jump_tables[self.jump_table_base..] {
             for entry in table.iter_mut() {
                 entry.target = label_positions[entry.target as usize];
             }
